@@ -1,0 +1,645 @@
+package org.telegram.ui.Components;
+
+import android.animation.Animator;
+import android.animation.AnimatorSet;
+import android.animation.ObjectAnimator;
+import android.animation.TimeInterpolator;
+import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.PorterDuff;
+import android.graphics.drawable.Drawable;
+import android.os.Build;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.transition.ChangeBounds;
+import android.transition.Transition;
+import android.transition.TransitionManager;
+import android.transition.TransitionSet;
+import android.transition.TransitionValues;
+import android.transition.Visibility;
+import android.util.Property;
+import android.view.KeyEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import java.util.ArrayList;
+import me.vkryl.android.AnimatorUtils;
+import me.vkryl.android.animator.BoolAnimator;
+import me.vkryl.android.animator.FactorAnimator;
+import org.mvel2.asm.Opcodes;
+import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.AnimationNotificationsLocker;
+import org.telegram.messenger.LocaleController;
+import org.telegram.messenger.R;
+import org.telegram.ui.ActionBar.ActionBarMenuItem;
+import org.telegram.ui.ActionBar.Theme;
+import org.telegram.ui.Adapters.FiltersView;
+
+/* JADX INFO: loaded from: classes5.dex */
+public class FragmentSearchField extends FrameLayout implements FactorAnimator.Target, Theme.Colorable {
+    private final LinearLayout additionalIconsLayout;
+    private final BoolAnimator animatorCloseIconVisible;
+    private final FactorAnimator animatorSearchFiltersWidth;
+    private final BoolAnimator animatorSearchIconVisible;
+    private Drawable bg;
+    private float clipHeight;
+    private boolean closeButtonForcedVisible;
+    private final ImageView closeIcon;
+    private final ArrayList currentSearchFilters;
+    public final EditTextBoldCursor editText;
+    public boolean isSectionBackground;
+    private final AnimationNotificationsLocker notificationsLocker;
+    private Runnable onCloseSearch;
+    private final Theme.ResourcesProvider resourcesProvider;
+    private final LinearLayout searchFilterLayout;
+    private SearchFiltersListener searchFiltersListener;
+    private final ImageView searchIcon;
+    private int selectedFilterIndex;
+
+    public interface SearchFiltersListener {
+        void hideActionMode();
+
+        void onSearchFilterCleared(FiltersView.MediaFilterData mediaFilterData);
+    }
+
+    @Override // me.vkryl.android.animator.FactorAnimator.Target
+    public /* synthetic */ void onFactorChangeFinished(int i, float f, FactorAnimator factorAnimator) {
+        FactorAnimator.Target.CC.$default$onFactorChangeFinished(this, i, f, factorAnimator);
+    }
+
+    public FragmentSearchField(Context context, Theme.ResourcesProvider resourcesProvider) {
+        super(context);
+        CubicBezierInterpolator cubicBezierInterpolator = CubicBezierInterpolator.EASE_OUT_QUINT;
+        this.animatorCloseIconVisible = new BoolAnimator(0, this, cubicBezierInterpolator, 380L, false);
+        this.animatorSearchIconVisible = new BoolAnimator(1, this, cubicBezierInterpolator, 380L, true);
+        this.animatorSearchFiltersWidth = new FactorAnimator(2, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 280L);
+        this.clipHeight = 1.0f;
+        this.notificationsLocker = new AnimationNotificationsLocker();
+        this.currentSearchFilters = new ArrayList();
+        this.resourcesProvider = resourcesProvider;
+        AnonymousClass1 anonymousClass1 = new EditTextBoldCursor(context) { // from class: org.telegram.ui.Components.FragmentSearchField.1
+            AnonymousClass1(Context context2) {
+                super(context2);
+            }
+
+            @Override // org.telegram.ui.Components.EditTextBoldCursor, android.widget.TextView, android.view.View
+            protected void onMeasure(int i, int i2) {
+                super.onMeasure(i, i2);
+                setPivotX(getPaddingLeft());
+                setPivotY(getMeasuredHeight() / 2.0f);
+            }
+
+            @Override // android.widget.TextView, android.view.View, android.view.KeyEvent.Callback
+            public boolean onKeyDown(int i, KeyEvent keyEvent) {
+                if (i == 67 && FragmentSearchField.this.editText.length() == 0 && FragmentSearchField.this.hasRemovableFilters()) {
+                    if (FragmentSearchField.this.hasRemovableFilters()) {
+                        FiltersView.MediaFilterData mediaFilterData = (FiltersView.MediaFilterData) FragmentSearchField.this.currentSearchFilters.get(FragmentSearchField.this.currentSearchFilters.size() - 1);
+                        if (FragmentSearchField.this.searchFiltersListener != null) {
+                            FragmentSearchField.this.searchFiltersListener.onSearchFilterCleared(mediaFilterData);
+                        }
+                        FragmentSearchField.this.removeSearchFilter(mediaFilterData);
+                    }
+                    return true;
+                }
+                return super.onKeyDown(i, keyEvent);
+            }
+        };
+        this.editText = anonymousClass1;
+        anonymousClass1.setTextSize(1, 15.0f);
+        anonymousClass1.setCursorWidth(1.5f);
+        anonymousClass1.setInputType(655536);
+        anonymousClass1.setSingleLine(true);
+        anonymousClass1.setBackground(null);
+        anonymousClass1.setVerticalScrollBarEnabled(false);
+        anonymousClass1.setHorizontalScrollBarEnabled(false);
+        anonymousClass1.setPadding(AndroidUtilities.dp(48.0f), 0, AndroidUtilities.dp(48.0f), 0);
+        anonymousClass1.setClipToPadding(true);
+        anonymousClass1.setImeOptions(268435462);
+        anonymousClass1.setGravity((LocaleController.isRTL ? 5 : 3) | 16);
+        anonymousClass1.addTextChangedListener(new TextWatcher() { // from class: org.telegram.ui.Components.FragmentSearchField.2
+            @Override // android.text.TextWatcher
+            public void beforeTextChanged(CharSequence charSequence, int i, int i2, int i3) {
+            }
+
+            @Override // android.text.TextWatcher
+            public void onTextChanged(CharSequence charSequence, int i, int i2, int i3) {
+            }
+
+            AnonymousClass2() {
+            }
+
+            @Override // android.text.TextWatcher
+            public void afterTextChanged(Editable editable) {
+                if (!FragmentSearchField.this.currentSearchFilters.isEmpty() && editable.length() > 0 && FragmentSearchField.this.selectedFilterIndex >= 0) {
+                    FragmentSearchField.this.selectedFilterIndex = -1;
+                    FragmentSearchField.this.onFiltersChanged();
+                }
+                FragmentSearchField.this.checkCloseButtonVisible();
+            }
+        });
+        if (Build.VERSION.SDK_INT >= 35) {
+            anonymousClass1.setLocalePreferredLineHeightForMinimumUsed(false);
+        }
+        addView(anonymousClass1, LayoutHelper.createFrame(-1, -1.0f, Opcodes.DNEG, 0.0f, 0.0f, 0.0f, 0.0f));
+        ImageView imageView = new ImageView(context2);
+        this.searchIcon = imageView;
+        ImageView.ScaleType scaleType = ImageView.ScaleType.CENTER;
+        imageView.setScaleType(scaleType);
+        imageView.setImageResource(R.drawable.outline_search_1_24);
+        addView(imageView, LayoutHelper.createFrame(24, 24.0f, (LocaleController.isRTL ? 5 : 3) | 16, 12.0f, 0.0f, 12.0f, 0.0f));
+        LinearLayout linearLayout = new LinearLayout(context2);
+        this.additionalIconsLayout = linearLayout;
+        linearLayout.setOrientation(0);
+        addView(linearLayout, LayoutHelper.createFrame(-2, -1.0f, (LocaleController.isRTL ? 3 : 5) | 16, 32.0f, 0.0f, 32.0f, 0.0f));
+        ImageView imageView2 = new ImageView(context2);
+        this.closeIcon = imageView2;
+        imageView2.setScaleType(scaleType);
+        imageView2.setImageResource(R.drawable.miniplayer_close);
+        imageView2.setVisibility(8);
+        imageView2.setOnClickListener(new View.OnClickListener() { // from class: org.telegram.ui.Components.FragmentSearchField$$ExternalSyntheticLambda0
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view) {
+                this.f$0.lambda$new$0(view);
+            }
+        });
+        addView(imageView2, LayoutHelper.createFrame(24, 24.0f, (LocaleController.isRTL ? 3 : 5) | 16, 12.0f, 0.0f, 12.0f, 0.0f));
+        AnonymousClass3 anonymousClass3 = new LinearLayout(getContext()) { // from class: org.telegram.ui.Components.FragmentSearchField.3
+            AnonymousClass3(Context context2) {
+                super(context2);
+            }
+
+            @Override // android.widget.LinearLayout, android.view.ViewGroup, android.view.View
+            protected void onLayout(boolean z, int i, int i2, int i3, int i4) {
+                FragmentSearchField.this.animatorSearchFiltersWidth.animateTo(getMeasuredWidth());
+                super.onLayout(z, i, i2, i3, i4);
+            }
+        };
+        this.searchFilterLayout = anonymousClass3;
+        anonymousClass3.setOrientation(0);
+        anonymousClass3.setVisibility(0);
+        addView(anonymousClass3, LayoutHelper.createFrame(-2, 32.0f, (LocaleController.isRTL ? 5 : 3) | 16, 4.0f, 0.0f, 4.0f, 0.0f));
+        setWillNotDraw(false);
+        checkUi_editTextPaddings();
+        updateColors();
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Components.FragmentSearchField$1 */
+    class AnonymousClass1 extends EditTextBoldCursor {
+        AnonymousClass1(Context context2) {
+            super(context2);
+        }
+
+        @Override // org.telegram.ui.Components.EditTextBoldCursor, android.widget.TextView, android.view.View
+        protected void onMeasure(int i, int i2) {
+            super.onMeasure(i, i2);
+            setPivotX(getPaddingLeft());
+            setPivotY(getMeasuredHeight() / 2.0f);
+        }
+
+        @Override // android.widget.TextView, android.view.View, android.view.KeyEvent.Callback
+        public boolean onKeyDown(int i, KeyEvent keyEvent) {
+            if (i == 67 && FragmentSearchField.this.editText.length() == 0 && FragmentSearchField.this.hasRemovableFilters()) {
+                if (FragmentSearchField.this.hasRemovableFilters()) {
+                    FiltersView.MediaFilterData mediaFilterData = (FiltersView.MediaFilterData) FragmentSearchField.this.currentSearchFilters.get(FragmentSearchField.this.currentSearchFilters.size() - 1);
+                    if (FragmentSearchField.this.searchFiltersListener != null) {
+                        FragmentSearchField.this.searchFiltersListener.onSearchFilterCleared(mediaFilterData);
+                    }
+                    FragmentSearchField.this.removeSearchFilter(mediaFilterData);
+                }
+                return true;
+            }
+            return super.onKeyDown(i, keyEvent);
+        }
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Components.FragmentSearchField$2 */
+    class AnonymousClass2 implements TextWatcher {
+        @Override // android.text.TextWatcher
+        public void beforeTextChanged(CharSequence charSequence, int i, int i2, int i3) {
+        }
+
+        @Override // android.text.TextWatcher
+        public void onTextChanged(CharSequence charSequence, int i, int i2, int i3) {
+        }
+
+        AnonymousClass2() {
+        }
+
+        @Override // android.text.TextWatcher
+        public void afterTextChanged(Editable editable) {
+            if (!FragmentSearchField.this.currentSearchFilters.isEmpty() && editable.length() > 0 && FragmentSearchField.this.selectedFilterIndex >= 0) {
+                FragmentSearchField.this.selectedFilterIndex = -1;
+                FragmentSearchField.this.onFiltersChanged();
+            }
+            FragmentSearchField.this.checkCloseButtonVisible();
+        }
+    }
+
+    public /* synthetic */ void lambda$new$0(View view) {
+        if (hasRemovableFilters()) {
+            SearchFiltersListener searchFiltersListener = this.searchFiltersListener;
+            if (searchFiltersListener != null) {
+                searchFiltersListener.hideActionMode();
+            }
+            for (int i = 0; i < this.currentSearchFilters.size(); i++) {
+                if (this.searchFiltersListener != null && ((FiltersView.MediaFilterData) this.currentSearchFilters.get(i)).removable) {
+                    this.searchFiltersListener.onSearchFilterCleared((FiltersView.MediaFilterData) this.currentSearchFilters.get(i));
+                }
+            }
+            clearSearchFilters();
+            return;
+        }
+        Runnable runnable = this.onCloseSearch;
+        if (runnable != null) {
+            runnable.run();
+        } else {
+            this.editText.getText().clear();
+        }
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Components.FragmentSearchField$3 */
+    class AnonymousClass3 extends LinearLayout {
+        AnonymousClass3(Context context2) {
+            super(context2);
+        }
+
+        @Override // android.widget.LinearLayout, android.view.ViewGroup, android.view.View
+        protected void onLayout(boolean z, int i, int i2, int i3, int i4) {
+            FragmentSearchField.this.animatorSearchFiltersWidth.animateTo(getMeasuredWidth());
+            super.onLayout(z, i, i2, i3, i4);
+        }
+    }
+
+    public void addAdditionalIcon(View view) {
+        this.additionalIconsLayout.addView(view);
+    }
+
+    public void setClipHeight(float f) {
+        if (Math.abs(this.clipHeight - f) < 0.01f) {
+            return;
+        }
+        this.clipHeight = f;
+        invalidate();
+        float fLerp = AndroidUtilities.lerp(0.75f, 1.0f, this.clipHeight);
+        this.editText.setScaleX(fLerp);
+        this.editText.setScaleY(fLerp);
+        this.searchIcon.setScaleX(fLerp);
+        this.searchIcon.setScaleY(fLerp);
+        this.closeIcon.setScaleX(fLerp);
+        this.closeIcon.setScaleY(fLerp);
+    }
+
+    @Override // android.view.ViewGroup, android.view.View
+    protected void dispatchDraw(Canvas canvas) {
+        canvas.save();
+        Drawable drawable = this.bg;
+        if (drawable != null) {
+            drawable.setBounds(getPaddingLeft(), getPaddingTop(), getWidth() - getPaddingRight(), (int) ((getHeight() - getPaddingBottom()) * this.clipHeight));
+            this.bg.draw(canvas);
+        }
+        if (this.clipHeight < 1.0f) {
+            canvas.clipRect(0.0f, 0.0f, getWidth(), getHeight() * this.clipHeight);
+            canvas.translate(0.0f, ((-getHeight()) * (1.0f - this.clipHeight)) / 2.0f);
+        }
+        super.dispatchDraw(canvas);
+        canvas.restore();
+    }
+
+    @Override // android.widget.FrameLayout, android.view.View
+    protected void onMeasure(int i, int i2) {
+        super.onMeasure(i, i2);
+        checkUi_editTextPaddings();
+    }
+
+    private void checkUi_editTextPaddings() {
+        int iMax = Math.max(((int) this.animatorSearchFiltersWidth.getFactor()) + AndroidUtilities.dp(6.0f), AndroidUtilities.dp(48.0f));
+        int iDp = AndroidUtilities.dp(48.0f) + this.additionalIconsLayout.getMeasuredWidth();
+        boolean z = LocaleController.isRTL;
+        int i = z ? iDp : iMax;
+        if (!z) {
+            iMax = iDp;
+        }
+        android.graphics.Rect rect = AndroidUtilities.rectTmp2;
+        rect.set(i, 0, this.editText.getMeasuredWidth() - iMax, this.editText.getMeasuredHeight());
+        this.editText.setClipBounds(rect);
+        this.editText.setPadding(i, 0, iMax, 0);
+    }
+
+    public void setSectionBackground() {
+        this.isSectionBackground = true;
+        setPadding(AndroidUtilities.dp(3.0f), AndroidUtilities.dp(3.0f), AndroidUtilities.dp(3.0f), AndroidUtilities.dp(3.0f));
+        updateColors();
+    }
+
+    @Override // org.telegram.ui.ActionBar.Theme.Colorable
+    public void updateColors() {
+        Drawable drawableCreateRoundRectDrawable;
+        Theme.ResourcesProvider resourcesProvider = this.resourcesProvider;
+        boolean zIsDark = resourcesProvider != null ? resourcesProvider.isDark() : Theme.isCurrentThemeDark();
+        if (this.isSectionBackground) {
+            drawableCreateRoundRectDrawable = Theme.createRoundRectDrawableShadowed(AndroidUtilities.dp(20.0f), getThemedColor(Theme.key_windowBackgroundWhite));
+        } else {
+            drawableCreateRoundRectDrawable = Theme.createRoundRectDrawable(AndroidUtilities.dp(20.0f), getThemedColor(Theme.key_windowBackgroundWhiteBlackText, zIsDark ? 0.07f : 0.05f));
+        }
+        this.bg = drawableCreateRoundRectDrawable;
+        ImageView imageView = this.searchIcon;
+        int i = Theme.key_windowBackgroundWhiteBlackText;
+        int themedColor = getThemedColor(i, 0.6f);
+        PorterDuff.Mode mode = PorterDuff.Mode.MULTIPLY;
+        imageView.setColorFilter(themedColor, mode);
+        this.closeIcon.setColorFilter(getThemedColor(i, 0.6f), mode);
+        this.closeIcon.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_listSelector), 1, AndroidUtilities.dp(17.0f)));
+        this.editText.setHintTextColor(getThemedColor(i, 0.5f));
+        this.editText.setTextColor(getThemedColor(i));
+        this.editText.setCursorColor(getThemedColor(Theme.key_groupcreate_cursor));
+        int childCount = this.additionalIconsLayout.getChildCount();
+        for (int i2 = 0; i2 < childCount; i2++) {
+            View childAt = this.additionalIconsLayout.getChildAt(i2);
+            if (childAt instanceof ActionBarMenuItem) {
+                ActionBarMenuItem actionBarMenuItem = (ActionBarMenuItem) childAt;
+                if (actionBarMenuItem.getIconView() != null) {
+                    actionBarMenuItem.getIconView().setColorFilter(getThemedColor(Theme.key_windowBackgroundWhiteBlackText, 0.6f), PorterDuff.Mode.MULTIPLY);
+                }
+                childAt.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_listSelector), 1, AndroidUtilities.dp(17.0f)));
+            }
+        }
+        int childCount2 = this.searchFilterLayout.getChildCount();
+        for (int i3 = 0; i3 < childCount2; i3++) {
+            if (this.searchFilterLayout.getChildAt(i3) instanceof ActionBarMenuItem.SearchFilterView) {
+                ((ActionBarMenuItem.SearchFilterView) this.searchFilterLayout.getChildAt(i3)).updateColors();
+            }
+        }
+        invalidate();
+    }
+
+    private int getThemedColor(int i) {
+        return Theme.getColor(i, this.resourcesProvider);
+    }
+
+    private int getThemedColor(int i, float f) {
+        return Theme.multAlpha(getThemedColor(i), f);
+    }
+
+    public void setCloseButtonOnClickListener(Runnable runnable) {
+        this.onCloseSearch = runnable;
+    }
+
+    public void setCloseButtonVisible(boolean z) {
+        this.closeButtonForcedVisible = z;
+        checkCloseButtonVisible();
+    }
+
+    public void checkCloseButtonVisible() {
+        this.animatorCloseIconVisible.setValue(this.closeButtonForcedVisible || this.editText.length() > 0, true);
+    }
+
+    @Override // me.vkryl.android.animator.FactorAnimator.Target
+    public void onFactorChanged(int i, float f, float f2, FactorAnimator factorAnimator) {
+        if (i == 0) {
+            FragmentFloatingButton.setAnimatedVisibility(this.closeIcon, f);
+            this.closeIcon.setRotation((1.0f - f) * 90.0f);
+        } else if (i == 1) {
+            FragmentFloatingButton.setAnimatedVisibility(this.searchIcon, f);
+        } else if (i == 2) {
+            checkUi_editTextPaddings();
+        }
+    }
+
+    public boolean hasRemovableFilters() {
+        if (this.currentSearchFilters.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < this.currentSearchFilters.size(); i++) {
+            if (((FiltersView.MediaFilterData) this.currentSearchFilters.get(i)).removable) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public void setSearchFiltersListener(SearchFiltersListener searchFiltersListener) {
+        this.searchFiltersListener = searchFiltersListener;
+    }
+
+    public void addSearchFilter(FiltersView.MediaFilterData mediaFilterData) {
+        this.currentSearchFilters.add(mediaFilterData);
+        this.selectedFilterIndex = this.currentSearchFilters.size() - 1;
+        onFiltersChanged();
+    }
+
+    public void removeSearchFilter(FiltersView.MediaFilterData mediaFilterData) {
+        if (mediaFilterData.removable) {
+            this.currentSearchFilters.remove(mediaFilterData);
+            int i = this.selectedFilterIndex;
+            if (i < 0 || i > this.currentSearchFilters.size() - 1) {
+                this.selectedFilterIndex = this.currentSearchFilters.size() - 1;
+            }
+            onFiltersChanged();
+            SearchFiltersListener searchFiltersListener = this.searchFiltersListener;
+            if (searchFiltersListener != null) {
+                searchFiltersListener.hideActionMode();
+            }
+        }
+    }
+
+    public void clearSearchFiltersWithCallback() {
+        if (this.currentSearchFilters.isEmpty() || this.searchFiltersListener == null) {
+            return;
+        }
+        for (int i = 0; i < this.currentSearchFilters.size(); i++) {
+            if (((FiltersView.MediaFilterData) this.currentSearchFilters.get(i)).removable) {
+                this.searchFiltersListener.onSearchFilterCleared((FiltersView.MediaFilterData) this.currentSearchFilters.get(i));
+            }
+        }
+    }
+
+    public void clearSearchFilters() {
+        int i = 0;
+        while (i < this.currentSearchFilters.size()) {
+            if (((FiltersView.MediaFilterData) this.currentSearchFilters.get(i)).removable) {
+                this.currentSearchFilters.remove(i);
+                i--;
+            }
+            i++;
+        }
+        onFiltersChanged();
+    }
+
+    public void onFiltersChanged() {
+        final ActionBarMenuItem.SearchFilterView searchFilterView;
+        boolean zIsEmpty = this.currentSearchFilters.isEmpty();
+        this.animatorSearchIconVisible.setValue(zIsEmpty, true);
+        ArrayList arrayList = new ArrayList(this.currentSearchFilters);
+        TransitionSet transitionSet = new TransitionSet();
+        ChangeBounds changeBounds = new ChangeBounds();
+        changeBounds.setDuration(150L);
+        transitionSet.addTransition(new Visibility() { // from class: org.telegram.ui.Components.FragmentSearchField.4
+            AnonymousClass4() {
+            }
+
+            @Override // android.transition.Visibility
+            public Animator onAppear(ViewGroup viewGroup, View view, TransitionValues transitionValues, TransitionValues transitionValues2) {
+                if (view instanceof ActionBarMenuItem.SearchFilterView) {
+                    AnimatorSet animatorSet = new AnimatorSet();
+                    animatorSet.playTogether(ObjectAnimator.ofFloat(view, (Property<View, Float>) View.ALPHA, 0.0f, 1.0f), ObjectAnimator.ofFloat(view, (Property<View, Float>) View.SCALE_X, 0.5f, 1.0f), ObjectAnimator.ofFloat(view, (Property<View, Float>) View.SCALE_Y, 0.5f, 1.0f));
+                    animatorSet.setInterpolator(CubicBezierInterpolator.DEFAULT);
+                    return animatorSet;
+                }
+                return ObjectAnimator.ofFloat(view, (Property<View, Float>) View.ALPHA, 0.0f, 1.0f);
+            }
+
+            @Override // android.transition.Visibility
+            public Animator onDisappear(ViewGroup viewGroup, View view, TransitionValues transitionValues, TransitionValues transitionValues2) {
+                if (view instanceof ActionBarMenuItem.SearchFilterView) {
+                    AnimatorSet animatorSet = new AnimatorSet();
+                    animatorSet.playTogether(ObjectAnimator.ofFloat(view, (Property<View, Float>) View.ALPHA, view.getAlpha(), 0.0f), ObjectAnimator.ofFloat(view, (Property<View, Float>) View.SCALE_X, view.getScaleX(), 0.5f), ObjectAnimator.ofFloat(view, (Property<View, Float>) View.SCALE_Y, view.getScaleX(), 0.5f));
+                    animatorSet.setInterpolator(CubicBezierInterpolator.DEFAULT);
+                    return animatorSet;
+                }
+                return ObjectAnimator.ofFloat(view, (Property<View, Float>) View.ALPHA, 1.0f, 0.0f);
+            }
+        }.setDuration(150L)).addTransition(changeBounds);
+        transitionSet.setOrdering(0);
+        transitionSet.setInterpolator((TimeInterpolator) CubicBezierInterpolator.EASE_OUT);
+        transitionSet.addListener((Transition.TransitionListener) new Transition.TransitionListener() { // from class: org.telegram.ui.Components.FragmentSearchField.5
+            @Override // android.transition.Transition.TransitionListener
+            public void onTransitionPause(Transition transition) {
+            }
+
+            @Override // android.transition.Transition.TransitionListener
+            public void onTransitionResume(Transition transition) {
+            }
+
+            AnonymousClass5() {
+            }
+
+            @Override // android.transition.Transition.TransitionListener
+            public void onTransitionStart(Transition transition) {
+                FragmentSearchField.this.notificationsLocker.lock();
+            }
+
+            @Override // android.transition.Transition.TransitionListener
+            public void onTransitionEnd(Transition transition) {
+                FragmentSearchField.this.notificationsLocker.unlock();
+            }
+
+            @Override // android.transition.Transition.TransitionListener
+            public void onTransitionCancel(Transition transition) {
+                FragmentSearchField.this.notificationsLocker.unlock();
+            }
+        });
+        TransitionManager.beginDelayedTransition(this.searchFilterLayout, transitionSet);
+        int i = 0;
+        while (i < this.searchFilterLayout.getChildCount()) {
+            if (!arrayList.remove(((ActionBarMenuItem.SearchFilterView) this.searchFilterLayout.getChildAt(i)).getFilter())) {
+                this.searchFilterLayout.removeViewAt(i);
+                i--;
+            }
+            i++;
+        }
+        for (int i2 = 0; i2 < arrayList.size(); i2++) {
+            FiltersView.MediaFilterData mediaFilterData = (FiltersView.MediaFilterData) arrayList.get(i2);
+            if (mediaFilterData.reaction != null) {
+                searchFilterView = new ActionBarMenuItem.ReactionFilterView(getContext(), this.resourcesProvider, true);
+            } else {
+                searchFilterView = new ActionBarMenuItem.SearchFilterView(getContext(), this.resourcesProvider, true);
+            }
+            searchFilterView.setData(mediaFilterData);
+            searchFilterView.setOnClickListener(new View.OnClickListener() { // from class: org.telegram.ui.Components.FragmentSearchField$$ExternalSyntheticLambda1
+                @Override // android.view.View.OnClickListener
+                public final void onClick(View view) {
+                    this.f$0.lambda$onFiltersChanged$1(searchFilterView, view);
+                }
+            });
+            LinearLayout linearLayout = this.searchFilterLayout;
+            boolean z = LocaleController.isRTL;
+            linearLayout.addView(searchFilterView, LayoutHelper.createLinear(-2, -1, 0, z ? 6 : 0, 0, z ? 0 : 6, 0));
+        }
+        int i3 = 0;
+        while (i3 < this.searchFilterLayout.getChildCount()) {
+            ((ActionBarMenuItem.SearchFilterView) this.searchFilterLayout.getChildAt(i3)).setExpanded(i3 == this.selectedFilterIndex);
+            i3++;
+        }
+        this.searchFilterLayout.setTag(!zIsEmpty ? 1 : null);
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Components.FragmentSearchField$4 */
+    class AnonymousClass4 extends Visibility {
+        AnonymousClass4() {
+        }
+
+        @Override // android.transition.Visibility
+        public Animator onAppear(ViewGroup viewGroup, View view, TransitionValues transitionValues, TransitionValues transitionValues2) {
+            if (view instanceof ActionBarMenuItem.SearchFilterView) {
+                AnimatorSet animatorSet = new AnimatorSet();
+                animatorSet.playTogether(ObjectAnimator.ofFloat(view, (Property<View, Float>) View.ALPHA, 0.0f, 1.0f), ObjectAnimator.ofFloat(view, (Property<View, Float>) View.SCALE_X, 0.5f, 1.0f), ObjectAnimator.ofFloat(view, (Property<View, Float>) View.SCALE_Y, 0.5f, 1.0f));
+                animatorSet.setInterpolator(CubicBezierInterpolator.DEFAULT);
+                return animatorSet;
+            }
+            return ObjectAnimator.ofFloat(view, (Property<View, Float>) View.ALPHA, 0.0f, 1.0f);
+        }
+
+        @Override // android.transition.Visibility
+        public Animator onDisappear(ViewGroup viewGroup, View view, TransitionValues transitionValues, TransitionValues transitionValues2) {
+            if (view instanceof ActionBarMenuItem.SearchFilterView) {
+                AnimatorSet animatorSet = new AnimatorSet();
+                animatorSet.playTogether(ObjectAnimator.ofFloat(view, (Property<View, Float>) View.ALPHA, view.getAlpha(), 0.0f), ObjectAnimator.ofFloat(view, (Property<View, Float>) View.SCALE_X, view.getScaleX(), 0.5f), ObjectAnimator.ofFloat(view, (Property<View, Float>) View.SCALE_Y, view.getScaleX(), 0.5f));
+                animatorSet.setInterpolator(CubicBezierInterpolator.DEFAULT);
+                return animatorSet;
+            }
+            return ObjectAnimator.ofFloat(view, (Property<View, Float>) View.ALPHA, 1.0f, 0.0f);
+        }
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Components.FragmentSearchField$5 */
+    class AnonymousClass5 implements Transition.TransitionListener {
+        @Override // android.transition.Transition.TransitionListener
+        public void onTransitionPause(Transition transition) {
+        }
+
+        @Override // android.transition.Transition.TransitionListener
+        public void onTransitionResume(Transition transition) {
+        }
+
+        AnonymousClass5() {
+        }
+
+        @Override // android.transition.Transition.TransitionListener
+        public void onTransitionStart(Transition transition) {
+            FragmentSearchField.this.notificationsLocker.lock();
+        }
+
+        @Override // android.transition.Transition.TransitionListener
+        public void onTransitionEnd(Transition transition) {
+            FragmentSearchField.this.notificationsLocker.unlock();
+        }
+
+        @Override // android.transition.Transition.TransitionListener
+        public void onTransitionCancel(Transition transition) {
+            FragmentSearchField.this.notificationsLocker.unlock();
+        }
+    }
+
+    public /* synthetic */ void lambda$onFiltersChanged$1(ActionBarMenuItem.SearchFilterView searchFilterView, View view) {
+        int iIndexOf = this.currentSearchFilters.indexOf(searchFilterView.getFilter());
+        if (this.selectedFilterIndex != iIndexOf) {
+            this.selectedFilterIndex = iIndexOf;
+            onFiltersChanged();
+            return;
+        }
+        if (searchFilterView.getFilter().removable) {
+            if (!searchFilterView.isSelectedForDelete()) {
+                searchFilterView.setSelectedForDelete(true);
+                return;
+            }
+            FiltersView.MediaFilterData filter = searchFilterView.getFilter();
+            removeSearchFilter(filter);
+            SearchFiltersListener searchFiltersListener = this.searchFiltersListener;
+            if (searchFiltersListener != null) {
+                searchFiltersListener.onSearchFilterCleared(filter);
+            }
+        }
+    }
+}

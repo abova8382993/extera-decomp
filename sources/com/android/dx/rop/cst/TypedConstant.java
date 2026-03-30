@@ -1,0 +1,16 @@
+package com.android.dx.rop.cst;
+
+import com.android.dx.rop.type.TypeBearer;
+
+/* JADX INFO: loaded from: classes4.dex */
+public abstract class TypedConstant extends Constant implements TypeBearer {
+    @Override // com.android.dx.rop.type.TypeBearer
+    public final int getBasicType() {
+        return getType().getBasicType();
+    }
+
+    @Override // com.android.dx.rop.type.TypeBearer
+    public final int getBasicFrameType() {
+        return getType().getBasicFrameType();
+    }
+}

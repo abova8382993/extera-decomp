@@ -1,0 +1,12 @@
+package com.android.dx.rop.type;
+
+import com.android.dx.util.ToHuman;
+
+/* JADX INFO: loaded from: classes4.dex */
+public interface TypeBearer extends ToHuman {
+    int getBasicFrameType();
+
+    int getBasicType();
+
+    Type getType();
+}

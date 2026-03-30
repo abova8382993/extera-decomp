@@ -1,0 +1,11 @@
+package org.telegram.p029ui.Stars;
+
+/* JADX INFO: loaded from: classes7.dex */
+public final /* synthetic */ class StarGiftSheet$$ExternalSyntheticLambda64 implements Runnable {
+    public final /* synthetic */ StarGiftSheet f$0;
+
+    @Override // java.lang.Runnable
+    public final void run() {
+        this.f$0.dismiss();
+    }
+}

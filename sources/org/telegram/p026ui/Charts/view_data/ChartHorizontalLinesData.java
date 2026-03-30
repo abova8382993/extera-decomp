@@ -1,0 +1,104 @@
+package org.telegram.p026ui.Charts.view_data;
+
+import android.graphics.Canvas;
+import android.text.Layout;
+import android.text.StaticLayout;
+import android.text.TextPaint;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
+import java.util.Locale;
+import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.BillingController;
+import org.telegram.messenger.LocaleController;
+import org.telegram.p026ui.ChannelMonetizationLayout;
+import org.telegram.p026ui.Stars.StarsIntroActivity;
+
+/* JADX INFO: loaded from: classes6.dex */
+public class ChartHorizontalLinesData {
+    public int alpha;
+    public int fixedAlpha;
+    private DecimalFormat formatterTON;
+    private StaticLayout[] layouts;
+    private StaticLayout[] layouts2;
+    public long[] values;
+    public CharSequence[] valuesStr;
+    public CharSequence[] valuesStr2;
+
+    /* JADX WARN: Multi-variable type inference failed */
+    /* JADX WARN: Removed duplicated region for block: B:21:0x006a  */
+    /* JADX WARN: Removed duplicated region for block: B:24:0x0079  */
+    /* JADX WARN: Removed duplicated region for block: B:25:0x007b  */
+    /* JADX WARN: Removed duplicated region for block: B:28:0x007f  */
+    /* JADX WARN: Removed duplicated region for block: B:58:0x0121  */
+    /* JADX WARN: Removed duplicated region for block: B:61:0x012f  */
+    /* JADX WARN: Removed duplicated region for block: B:62:0x0131  */
+    /* JADX WARN: Removed duplicated region for block: B:65:0x0135  */
+    /* JADX WARN: Type inference failed for: r0v0, types: [java.lang.Object, org.telegram.ui.Charts.view_data.ChartHorizontalLinesData] */
+    /*
+        Code decompiled incorrectly, please refer to instructions dump.
+        To view partially-correct code enable 'Show inconsistent code' option in preferences
+    */
+    public ChartHorizontalLinesData(long r24, long r26, boolean r28, float r29, int r30, android.text.TextPaint r31, android.text.TextPaint r32) {
+        /*
+            Method dump skipped, instruction units count: 401
+            To view this dump change 'Code comments level' option to 'DEBUG'
+        */
+        throw new UnsupportedOperationException("Method not decompiled: org.telegram.p026ui.Charts.view_data.ChartHorizontalLinesData.<init>(long, long, boolean, float, int, android.text.TextPaint, android.text.TextPaint):void");
+    }
+
+    public CharSequence format(int i, TextPaint textPaint, long j, int i2) {
+        if (i2 != 1) {
+            if (i2 != 2) {
+                return AndroidUtilities.formatWholeNumber((int) j, 0);
+            }
+            if (i == 1) {
+                return "≈" + BillingController.getInstance().formatCurrency(j, "USD");
+            }
+            return StarsIntroActivity.replaceStarsWithPlain("XTR " + LocaleController.formatNumber(j, ' '), 0.65f);
+        }
+        if (i == 1) {
+            return "≈" + BillingController.getInstance().formatCurrency(j, "USD");
+        }
+        if (this.formatterTON == null) {
+            DecimalFormatSymbols decimalFormatSymbols = new DecimalFormatSymbols(Locale.US);
+            decimalFormatSymbols.setDecimalSeparator('.');
+            DecimalFormat decimalFormat = new DecimalFormat("#.##", decimalFormatSymbols);
+            this.formatterTON = decimalFormat;
+            decimalFormat.setMinimumFractionDigits(2);
+            this.formatterTON.setMaximumFractionDigits(6);
+            this.formatterTON.setGroupingUsed(false);
+        }
+        this.formatterTON.setMaximumFractionDigits(j <= 1000000000 ? 6 : 2);
+        return ChannelMonetizationLayout.replaceTON("TON " + this.formatterTON.format(j / 1.0E9d), textPaint, 0.8f, -AndroidUtilities.m1081dp(0.66f), false);
+    }
+
+    public static long lookupHeight(long j) {
+        if (j > 100) {
+            j = round(j);
+        }
+        return ((long) Math.ceil(j / 5.0f)) * 5;
+    }
+
+    private static long round(long j) {
+        return ((float) (j / 5)) % 10.0f == 0.0f ? j : ((j / 10) + 1) * 10;
+    }
+
+    public void drawText(Canvas canvas, int i, int i2, float f, float f2, TextPaint textPaint) {
+        TextPaint textPaint2;
+        StaticLayout staticLayout = (i == 0 ? this.layouts : this.layouts2)[i2];
+        if (staticLayout == null) {
+            CharSequence charSequence = (i == 0 ? this.valuesStr : this.valuesStr2)[i2];
+            StaticLayout[] staticLayoutArr = i == 0 ? this.layouts : this.layouts2;
+            textPaint2 = textPaint;
+            StaticLayout staticLayout2 = new StaticLayout(charSequence, textPaint2, AndroidUtilities.displaySize.x, Layout.Alignment.ALIGN_NORMAL, 1.0f, 0.0f, false);
+            staticLayoutArr[i2] = staticLayout2;
+            staticLayout = staticLayout2;
+        } else {
+            textPaint2 = textPaint;
+        }
+        canvas.save();
+        canvas.translate(f, f2 + textPaint2.ascent());
+        staticLayout.draw(canvas);
+        canvas.restore();
+    }
+}
