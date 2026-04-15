@@ -214,20 +214,7 @@ class _ConstructorHook(MethodHook):
                         return
 
                     # Check dual mode
-                    is_dual = False
-                    try:
-                        DCV = find_class(
-                            "org.telegram.ui.Stories.recorder.DualCameraView"
-                        )
-                        if DCV is not None:
-                            CtxCls = find_class("android.content.Context")
-                            m = DCV.getClass().getDeclaredMethod(
-                                "roundDualAvailableStatic", CtxCls
-                            )
-                            m.setAccessible(True)
-                            is_dual = bool(m.invoke(None, context_arg))
-                    except Exception:
-                        pass
+                    is_dual = _check_dual_mode(context_arg)
 
                     if is_dual:
                         # Dual mode has its own animation
@@ -258,22 +245,40 @@ class _ConstructorHook(MethodHook):
             # Don't crash — original button still works since we're in after_hooked_method
 
 
+def _check_dual_mode(context):
+    """Check if dual camera mode is available."""
+    try:
+        DCV = find_class("org.telegram.ui.Stories.recorder.DualCameraView")
+        if DCV is not None:
+            # Use Java reflection on the actual Class object
+            from java.lang import Class as JClass
+            # DCV is a Chaquopy proxy; get the underlying Java class
+            java_class = JClass.forName("org.telegram.ui.Stories.recorder.DualCameraView")
+            CtxCls = JClass.forName("android.content.Context")
+            m = java_class.getDeclaredMethod("roundDualAvailableStatic", [CtxCls])
+            m.setAccessible(True)
+            return bool(m.invoke(None, [context]))
+    except Exception:
+        pass
+    return False
+
+
 def _run_original_click(plugin, icv, context, view):
     """
     Reproduce the original lambda$new$2 logic for non-CameraX modes.
     This runs the flip animation that the original code does.
     """
     try:
-        # Try to call the original lambda method directly
+        from java.lang import Class as JClass
         cls = icv.getClass()
-        CtxCls = find_class("android.content.Context")
-        ViewCls = find_class("android.view.View")
+        CtxCls = JClass.forName("android.content.Context")
+        ViewCls = JClass.forName("android.view.View")
 
         # Try to find and invoke the original method
         try:
-            m = cls.getDeclaredMethod("lambda$new$2", CtxCls, ViewCls)
+            m = cls.getDeclaredMethod("lambda$new$2", [CtxCls, ViewCls])
             m.setAccessible(True)
-            m.invoke(icv, context, view)
+            m.invoke(icv, [context, view])
             plugin.log("[SmoothFade] Original lambda$new$2 invoked")
             return
         except Exception:
@@ -335,16 +340,7 @@ class _LambdaHook(MethodHook):
                 return  # Not CameraX, let original run
 
             # Check dual mode
-            is_dual = False
-            try:
-                DCV = find_class("org.telegram.ui.Stories.recorder.DualCameraView")
-                if DCV is not None:
-                    CtxCls = find_class("android.content.Context")
-                    m = DCV.getClass().getDeclaredMethod("roundDualAvailableStatic", CtxCls)
-                    m.setAccessible(True)
-                    is_dual = bool(m.invoke(None, context))
-            except Exception:
-                pass
+            is_dual = _check_dual_mode(context)
 
             if is_dual:
                 return  # Dual mode, let original run
@@ -390,7 +386,7 @@ class SmoothCameraFadePlugin(BasePlugin):
             self.log("[SmoothFade] Trying to list available classes...")
             return
 
-        self.log(f"[SmoothFade] Found class: {ICV.getName()}")
+        self.log(f"[SmoothFade] Found class: {ICV}")
 
         # Strategy 1: Hook ALL constructors (most robust — no method name dependency)
         try:
