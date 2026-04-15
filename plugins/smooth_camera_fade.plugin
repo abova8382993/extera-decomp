@@ -1,17 +1,12 @@
 """
-Smooth Camera Fade Plugin v4 for exteraGram
+Smooth Camera Fade Plugin v4.1 for exteraGram
 
 Replaces the abrupt camera switch in round videos (CameraX non-dual
 mode) with a smooth fade-to-black transition, similar to iPhone.
 
-v4 strategy:
-- Hook the CONSTRUCTOR of InstantCameraView using hook_all_constructors
-  (no dependency on lambda method names which may be renamed by R8)
-- After construction, replace the OnClickListener on switchCameraButton
-  with our custom one that does a fade animation
-- Use ALL built-in SDK utilities (get_private_field, set_private_field,
-  get_static_private_field, R, run_on_ui_thread, OnClickListener)
-- Extensive logging at every step for debugging
+v4.1: Simplified — only hooks lambda$new$2 via hook_all_methods.
+No constructor hooking, no OnClickListener replacement.
+Uses built-in SDK utilities for all reflection.
 
 Two-level fade:
   1. UI (sender sees): View alpha 1->0->1 on cameraContainer
@@ -26,7 +21,7 @@ __description__ = (
     "visible to both sender and recipient"
 )
 __author__ = "Devin"
-__version__ = "4.0.0"
+__version__ = "4.1.0"
 __icon__ = "exteraPlugins/1"
 __min_version__ = "11.12.0"
 
@@ -39,7 +34,7 @@ from hook_utils import (
     set_private_field,
     get_static_private_field,
 )
-from android_utils import R, run_on_ui_thread, OnClickListener, log
+from android_utils import run_on_ui_thread, log
 from ui.settings import Header, Text
 from typing import List, Any
 
@@ -49,12 +44,9 @@ FADE_OUT_MS = 200
 FADE_IN_MS = 250
 
 
-def _do_camerax_fade(plugin, icv, context):
+def _do_camerax_fade(plugin, icv):
     """
     Fade animation for CameraX non-dual mode.
-
-    Uses run_on_ui_thread with delay for scheduling phases.
-    Uses built-in SDK utilities for field access.
 
     Timeline:
       t=0ms:   Lottie icon anim + fade-out (alpha 1->0) + GL alpha=0
@@ -68,8 +60,8 @@ def _do_camerax_fade(plugin, icv, context):
         if drawable is not None:
             drawable.setCurrentFrame(0)
             drawable.start()
-    except Exception:
-        pass
+    except Exception as e:
+        plugin.log(f"[SmoothFade] Lottie anim error (non-fatal): {e}")
 
     # Prevent double-tap
     set_private_field(icv, "flipAnimationInProgress", True)
@@ -78,47 +70,54 @@ def _do_camerax_fade(plugin, icv, context):
     container = get_private_field(icv, "cameraContainer")
     overlay = get_private_field(icv, "textureOverlayView")
 
+    plugin.log(f"[SmoothFade] container={container}, overlay={overlay}")
+
     if container is None:
-        plugin.log("[SmoothFade] cameraContainer is null, falling back to direct switch")
-        try:
-            icv.getClass().getDeclaredMethod("switchCameraX").setAccessible(True)
-            icv.getClass().getDeclaredMethod("switchCameraX").invoke(icv)
-        except Exception:
-            pass
+        plugin.log("[SmoothFade] cameraContainer null - direct switch")
+        _call_switch_camerax(plugin, icv)
         set_private_field(icv, "flipAnimationInProgress", False)
         return
 
-    plugin.log("[SmoothFade] Phase 1: fade-out starting")
+    plugin.log("[SmoothFade] Phase 1: fade-out")
 
     # --- Phase 1: Fade out (UI + GL) ---
-    container.animate().alpha(0.0).setDuration(int(FADE_OUT_MS)).start()
+    try:
+        container.animate().alpha(0.0).setDuration(int(FADE_OUT_MS)).start()
+    except Exception as e:
+        plugin.log(f"[SmoothFade] container animate error: {e}")
+
     if overlay is not None:
-        overlay.animate().alpha(0.0).setDuration(int(FADE_OUT_MS)).start()
+        try:
+            overlay.animate().alpha(0.0).setDuration(int(FADE_OUT_MS)).start()
+        except Exception as e:
+            plugin.log(f"[SmoothFade] overlay animate error: {e}")
 
     # GL fade: set cameraTextureAlpha to 0 (black frame in video)
-    set_private_field(icv, "cameraTextureAlpha", 0.0)
+    try:
+        set_private_field(icv, "cameraTextureAlpha", 0.0)
+    except Exception as e:
+        plugin.log(f"[SmoothFade] set cameraTextureAlpha error: {e}")
 
     # --- Phase 2: At midpoint, switch camera and fade back in ---
     def midpoint():
         try:
-            plugin.log("[SmoothFade] Phase 2: switching camera")
-
-            # Call switchCameraX via reflection
-            try:
-                cls = icv.getClass()
-                m = cls.getDeclaredMethod("switchCameraX")
-                m.setAccessible(True)
-                m.invoke(icv)
-            except Exception as e:
-                plugin.log(f"[SmoothFade] switchCameraX failed: {e}")
+            plugin.log("[SmoothFade] Phase 2: switch + fade-in")
+            _call_switch_camerax(plugin, icv)
 
             # GL fade in
             set_private_field(icv, "cameraTextureAlpha", 1.0)
 
             # UI fade in
-            container.animate().alpha(1.0).setDuration(int(FADE_IN_MS)).start()
+            try:
+                container.animate().alpha(1.0).setDuration(int(FADE_IN_MS)).start()
+            except Exception as e:
+                plugin.log(f"[SmoothFade] fade-in container error: {e}")
+
             if overlay is not None:
-                overlay.animate().alpha(1.0).setDuration(int(FADE_IN_MS)).start()
+                try:
+                    overlay.animate().alpha(1.0).setDuration(int(FADE_IN_MS)).start()
+                except Exception as e:
+                    plugin.log(f"[SmoothFade] fade-in overlay error: {e}")
 
             # --- Phase 3: Cleanup ---
             def cleanup():
@@ -130,194 +129,45 @@ def _do_camerax_fade(plugin, icv, context):
                         overlay.setAlpha(1.0)
                     set_private_field(icv, "cameraTextureAlpha", 1.0)
                     set_private_field(icv, "flipAnimationInProgress", False)
-                    plugin.log("[SmoothFade] Phase 3: cleanup done")
+                    plugin.log("[SmoothFade] Phase 3: done")
                 except Exception as e:
-                    plugin.log(f"[SmoothFade] Cleanup error: {e}")
+                    plugin.log(f"[SmoothFade] cleanup error: {e}")
+                    set_private_field(icv, "flipAnimationInProgress", False)
 
             run_on_ui_thread(cleanup, FADE_IN_MS + 50)
 
         except Exception as e:
             plugin.log(f"[SmoothFade] Phase 2 error: {e}")
             plugin.log(traceback.format_exc())
-            # Emergency cleanup
             set_private_field(icv, "flipAnimationInProgress", False)
 
     run_on_ui_thread(midpoint, FADE_OUT_MS)
-    plugin.log("[SmoothFade] Fade animation scheduled")
+    plugin.log("[SmoothFade] Fade scheduled")
 
 
-# ---------------------------------------------------------------------------
-# Constructor hook: replaces OnClickListener on switchCameraButton
-# ---------------------------------------------------------------------------
-
-class _ConstructorHook(MethodHook):
-    """
-    Hooks the InstantCameraView constructor.
-    After construction completes, replaces the OnClickListener on
-    switchCameraButton with our custom one that does fade animation
-    for CameraX non-dual mode.
-    """
-
-    def __init__(self, plugin):
-        self.plugin = plugin
-
-    def after_hooked_method(self, param):
-        try:
-            icv = param.thisObject
-            self.plugin.log("[SmoothFade] Constructor hook fired!")
-
-            # Get the switchCameraButton
-            button = get_private_field(icv, "switchCameraButton")
-            if button is None:
-                self.plugin.log("[SmoothFade] switchCameraButton not found")
-                return
-
-            # Store the constructor's context arg for later use
-            # Constructor signature: InstantCameraView(Context, Delegate, ResourcesProvider, boolean)
-            context_arg = param.args[0]
-
-            self.plugin.log("[SmoothFade] Replacing OnClickListener on switchCameraButton")
-
-            # Define our custom click handler
-            def on_switch_click(view):
-                try:
-                    self.plugin.log("[SmoothFade] Switch button clicked!")
-
-                    # Check camera ready
-                    camera_ready = get_private_field(icv, "cameraReady")
-                    if not camera_ready:
-                        self.plugin.log("[SmoothFade] Camera not ready, ignoring")
-                        return
-
-                    # Check not already animating
-                    flipping = get_private_field(icv, "flipAnimationInProgress")
-                    if flipping:
-                        self.plugin.log("[SmoothFade] Already animating, ignoring")
-                        return
-
-                    # Check if CameraX mode
-                    ExteraConfig = find_class(
-                        "com.exteragram.messenger.ExteraConfig"
-                    )
-                    if ExteraConfig is None:
-                        self.plugin.log("[SmoothFade] ExteraConfig not found, falling back")
-                        _run_original_click(self.plugin, icv, context_arg, view)
-                        return
-
-                    camera_type = get_static_private_field(ExteraConfig, "cameraType")
-                    self.plugin.log(f"[SmoothFade] cameraType = {camera_type}")
-
-                    if camera_type is None or int(camera_type) != 2:
-                        # Not CameraX — run original logic (it has flip animation)
-                        self.plugin.log("[SmoothFade] Not CameraX, using original")
-                        _run_original_click(self.plugin, icv, context_arg, view)
-                        return
-
-                    # Check dual mode
-                    is_dual = _check_dual_mode(context_arg)
-
-                    if is_dual:
-                        # Dual mode has its own animation
-                        self.plugin.log("[SmoothFade] Dual mode, using original")
-                        _run_original_click(self.plugin, icv, context_arg, view)
-                        return
-
-                    # CameraX non-dual: use our fade!
-                    self.plugin.log("[SmoothFade] CameraX non-dual -> fade animation!")
-                    _do_camerax_fade(self.plugin, icv, context_arg)
-
-                except Exception as e:
-                    self.plugin.log(f"[SmoothFade] Click handler error: {e}")
-                    self.plugin.log(traceback.format_exc())
-                    # Fallback: try original behavior
-                    try:
-                        _run_original_click(self.plugin, icv, context_arg, view)
-                    except Exception:
-                        pass
-
-            # Replace the OnClickListener using SDK's OnClickListener proxy
-            button.setOnClickListener(OnClickListener(on_switch_click))
-            self.plugin.log("[SmoothFade] OnClickListener replaced successfully!")
-
-        except Exception as e:
-            self.plugin.log(f"[SmoothFade] Constructor hook error: {e}")
-            self.plugin.log(traceback.format_exc())
-            # Don't crash — original button still works since we're in after_hooked_method
-
-
-def _check_dual_mode(context):
-    """Check if dual camera mode is available."""
+def _call_switch_camerax(plugin, icv):
+    """Call switchCameraX() via reflection on the instance."""
     try:
-        DCV = find_class("org.telegram.ui.Stories.recorder.DualCameraView")
-        if DCV is not None:
-            # Use Java reflection on the actual Class object
-            from java.lang import Class as JClass
-            # DCV is a Chaquopy proxy; get the underlying Java class
-            java_class = JClass.forName("org.telegram.ui.Stories.recorder.DualCameraView")
-            CtxCls = JClass.forName("android.content.Context")
-            m = java_class.getDeclaredMethod("roundDualAvailableStatic", [CtxCls])
-            m.setAccessible(True)
-            return bool(m.invoke(None, [context]))
-    except Exception:
-        pass
-    return False
-
-
-def _run_original_click(plugin, icv, context, view):
-    """
-    Reproduce the original lambda$new$2 logic for non-CameraX modes.
-    This runs the flip animation that the original code does.
-    """
-    try:
-        from java.lang import Class as JClass
         cls = icv.getClass()
-        CtxCls = JClass.forName("android.content.Context")
-        ViewCls = JClass.forName("android.view.View")
-
-        # Try to find and invoke the original method
-        try:
-            m = cls.getDeclaredMethod("lambda$new$2", [CtxCls, ViewCls])
-            m.setAccessible(True)
-            m.invoke(icv, [context, view])
-            plugin.log("[SmoothFade] Original lambda$new$2 invoked")
-            return
-        except Exception:
-            pass
-
-        # If lambda name was obfuscated, try the basic camera switch
-        plugin.log("[SmoothFade] lambda$new$2 not found, doing basic switch")
-
-        ExteraConfig = find_class("com.exteragram.messenger.ExteraConfig")
-        camera_type = get_static_private_field(ExteraConfig, "cameraType") if ExteraConfig else None
-
-        camera_ready = get_private_field(icv, "cameraReady")
-        if not camera_ready:
-            return
-
-        if camera_type is not None and int(camera_type) != 2:
-            both = get_private_field(icv, "bothCameras")
-            if not both:
-                m = cls.getDeclaredMethod("switchCamera")
-                m.setAccessible(True)
-                m.invoke(icv)
-        else:
-            m = cls.getDeclaredMethod("switchCameraX")
-            m.setAccessible(True)
-            m.invoke(icv)
-
+        m = cls.getDeclaredMethod("switchCameraX")
+        m.setAccessible(True)
+        m.invoke(icv)
+        plugin.log("[SmoothFade] switchCameraX() called")
     except Exception as e:
-        plugin.log(f"[SmoothFade] _run_original_click error: {e}")
+        plugin.log(f"[SmoothFade] switchCameraX error: {e}")
+        plugin.log(traceback.format_exc())
 
 
 # ---------------------------------------------------------------------------
-# Also try hooking lambda$new$2 directly as a fallback strategy
+# Hook: intercept lambda$new$2 for CameraX non-dual
 # ---------------------------------------------------------------------------
 
-class _LambdaHook(MethodHook):
+class _CameraFadeHook(MethodHook):
     """
-    MethodHook on lambda$new$2 as a backup strategy.
-    If constructor hook doesn't work (e.g., button was already set up),
-    this catches the click at the method level.
+    MethodHook on lambda$new$2.
+
+    Only intercepts CameraX non-dual mode.
+    If our code crashes before setResult(), original runs as fallback.
     """
 
     def __init__(self, plugin):
@@ -326,44 +176,68 @@ class _LambdaHook(MethodHook):
     def before_hooked_method(self, param):
         try:
             icv = param.thisObject
-            context = param.args[0]
+            self.plugin.log("[SmoothFade] lambda$new$2 fired!")
 
-            self.plugin.log("[SmoothFade] lambda$new$2 hook fired!")
-
-            # Only intercept CameraX (cameraType == 2)
+            # Check CameraX mode
             ExteraConfig = find_class("com.exteragram.messenger.ExteraConfig")
             if ExteraConfig is None:
-                return
+                self.plugin.log("[SmoothFade] ExteraConfig not found")
+                return  # Let original run
 
             camera_type = get_static_private_field(ExteraConfig, "cameraType")
-            if camera_type is None or int(camera_type) != 2:
-                return  # Not CameraX, let original run
+            self.plugin.log(f"[SmoothFade] cameraType={camera_type}")
 
-            # Check dual mode
-            is_dual = _check_dual_mode(context)
+            if camera_type is None or int(camera_type) != 2:
+                self.plugin.log("[SmoothFade] Not CameraX, original runs")
+                return
+
+            # Check dual mode - if dual, let original handle it
+            is_dual = False
+            try:
+                from java.lang import Class as JClass
+                dcv_class = JClass.forName(
+                    "org.telegram.ui.Stories.recorder.DualCameraView"
+                )
+                ctx_class = JClass.forName("android.content.Context")
+                m = dcv_class.getDeclaredMethod(
+                    "roundDualAvailableStatic", [ctx_class]
+                )
+                m.setAccessible(True)
+                context = param.args[0]
+                is_dual = bool(m.invoke(None, [context]))
+            except Exception:
+                pass  # If check fails, assume non-dual
 
             if is_dual:
-                return  # Dual mode, let original run
+                self.plugin.log("[SmoothFade] Dual mode, original runs")
+                return
 
-            # Camera ready?
-            camera_ready = get_private_field(icv, "cameraReady")
-            if not camera_ready:
+            # CameraX non-dual - our territory!
+            # The original code does: switchCameraX() then SKIPS animation.
+            # We replace with: fade-out -> switchCameraX -> fade-in.
+
+            # Check flipAnimationInProgress to prevent double-tap
+            flip_in_progress = get_private_field(icv, "flipAnimationInProgress")
+            self.plugin.log(f"[SmoothFade] flipAnimationInProgress={flip_in_progress}")
+
+            if flip_in_progress:
+                self.plugin.log("[SmoothFade] Already animating, block")
                 param.setResult(None)
                 return
 
-            flipping = get_private_field(icv, "flipAnimationInProgress")
-            if flipping:
-                param.setResult(None)
-                return
+            self.plugin.log("[SmoothFade] Intercepting! Running fade...")
 
-            self.plugin.log("[SmoothFade] lambda hook: CameraX non-dual -> fade!")
-            _do_camerax_fade(self.plugin, icv, context)
+            # Run our fade animation
+            _do_camerax_fade(self.plugin, icv)
+
+            # Block the original method (we handle switchCameraX ourselves)
             param.setResult(None)
+            self.plugin.log("[SmoothFade] Original blocked via setResult")
 
         except Exception as e:
-            self.plugin.log(f"[SmoothFade] lambda hook error: {e}")
+            self.plugin.log(f"[SmoothFade] Hook error: {e}")
             self.plugin.log(traceback.format_exc())
-            # Do NOT setResult — let original run as fallback
+            # Do NOT setResult - original runs as fallback
 
 
 # ---------------------------------------------------------------------------
@@ -373,37 +247,41 @@ class _LambdaHook(MethodHook):
 class SmoothCameraFadePlugin(BasePlugin):
 
     def on_plugin_load(self):
-        self.log("[SmoothFade] Loading plugin v4.0.0...")
+        self.log("[SmoothFade] Loading v4.1.0...")
         self._setup_hooks()
         self.log("[SmoothFade] Plugin loaded")
 
     def _setup_hooks(self):
         ICV = find_class("org.telegram.ui.Components.InstantCameraView")
-        self.log(f"[SmoothFade] find_class result: {ICV}")
+        self.log(f"[SmoothFade] find_class(ICV) = {ICV}")
 
         if ICV is None:
             self.log("[SmoothFade] ERROR: InstantCameraView not found!")
-            self.log("[SmoothFade] Trying to list available classes...")
             return
 
-        self.log(f"[SmoothFade] Found class: {ICV}")
-
-        # Strategy 1: Hook ALL constructors (most robust — no method name dependency)
+        # Hook lambda$new$2 - the switch camera button click handler
         try:
-            ctor_hook = _ConstructorHook(self)
-            unhooks = self.hook_all_constructors(ICV, ctor_hook, priority=50)
+            hook = _CameraFadeHook(self)
+            unhooks = self.hook_all_methods(
+                ICV, "lambda$new$2", hook, priority=50
+            )
             count = len(unhooks) if unhooks else 0
-            self.log(f"[SmoothFade] hook_all_constructors: {count} hooked")
-        except Exception as e:
-            self.log(f"[SmoothFade] hook_all_constructors failed: {e}")
-            self.log(traceback.format_exc())
+            self.log(f"[SmoothFade] hook_all_methods(lambda$new$2): {count}")
 
-        # Strategy 2: Also hook lambda$new$2 as a backup
-        try:
-            lambda_hook = _LambdaHook(self)
-            unhooks2 = self.hook_all_methods(ICV, "lambda$new$2", lambda_hook, priority=40)
-            count2 = len(unhooks2) if unhooks2 else 0
-            self.log(f"[SmoothFade] hook_all_methods(lambda$new$2): {count2} hooked")
+            if count == 0:
+                self.log("[SmoothFade] WARNING: 0 methods hooked!")
+                # List methods to diagnose
+                try:
+                    java_cls = ICV.getClass()
+                    methods = java_cls.getDeclaredMethods()
+                    names = set()
+                    for m in methods:
+                        names.add(str(m.getName()))
+                    lambda_names = sorted([n for n in names if "lambda" in n or "switch" in n])
+                    self.log(f"[SmoothFade] Relevant methods: {lambda_names}")
+                except Exception as e2:
+                    self.log(f"[SmoothFade] Method listing error: {e2}")
+
         except Exception as e:
             self.log(f"[SmoothFade] hook_all_methods failed: {e}")
             self.log(traceback.format_exc())
@@ -413,12 +291,12 @@ class SmoothCameraFadePlugin(BasePlugin):
 
     def create_settings(self) -> List[Any]:
         return [
-            Header(text="Smooth Camera Fade v4"),
+            Header(text="Smooth Camera Fade v4.1"),
             Text(
                 text="Replaces the abrupt camera switch with a smooth "
                      "fade when switching cameras during round video "
                      "recording (CameraX mode).\n\n"
                      "The fade is visible to both you and the recipient.\n\n"
-                     "Check logs with: adb logcat | grep SmoothFade"
+                     "Check logs: adb logcat | grep SmoothFade"
             ),
         ]
