@@ -1,19 +1,24 @@
 """
-Smooth Camera Fade Plugin v4.8 for exteraGram
+Smooth Camera Fade Plugin v4.9 for exteraGram
 
 Replaces the abrupt camera switch in round videos (CameraX non-dual
 mode) with a smooth "dip to black" transition, similar to iPhone.
 
-v4.5 key insight: CameraGLThread (preview) and VideoRecorder (encoded
-video) have SEPARATE GL rendering pipelines. Previous versions only
-affected the preview. This version hooks BOTH pipelines:
+v4.9 improvements over v4.8:
+  - Cosine ease-in-out curves instead of linear interpolation
+  - Double-pass GL darken for deeper blacks (alpha^2 effective)
+  - Black hold period at midpoint (~60ms) hides camera switch and
+    progress ring completely
+  - Properly saves/restores GL blend state to avoid artifacts
+  - Synced preview animation with AccelerateDecelerateInterpolator
 
+Architecture:
   1. Hook lambda$new$2 -> intercept camera switch, delay actual switch
   2. Hook InstantCameraVideoEncoderOverlayHelper.render() -> darken
      each encoded video frame using GL multiply blend
-  3. Phase 1 (0-250ms): old camera darkens to black
-  4. At 250ms: switchCameraX() switches the actual camera
-  5. Phase 2 (250-500ms): new camera brightens from black
+  3. Phase 1 (fade-out): old camera darkens to black (ease-in curve)
+  4. Hold at black for ~60ms while camera switches
+  5. Phase 2 (fade-in): new camera brightens from black (ease-out curve)
 
 The darken effect uses a GL shader that draws a full-screen quad
 multiplied by fadeAlpha, applied AFTER the normal frame + overlay
@@ -27,10 +32,11 @@ __description__ = (
     "visible to both sender and recipient"
 )
 __author__ = "Devin"
-__version__ = "4.8.0"
+__version__ = "4.9.0"
 __icon__ = "exteraPlugins/1"
 __min_version__ = "11.12.0"
 
+import math
 import traceback
 from java.lang import Class as JClass, System as JSystem
 
@@ -45,17 +51,25 @@ _DEFAULT_FADE_MS = 500  # total fade duration in ms
 _MIN_FADE_MS = 100
 _MAX_FADE_MS = 5000
 
+# Black hold period at midpoint (ms) - camera switches here
+_HOLD_MS = 60
+
 # Current fade half-duration (updated from settings)
 _fade_half_ms = _DEFAULT_FADE_MS // 2
 
 # GLES20 constants
 GL_BLEND = 0x0BE2
 GL_ZERO = 0
+GL_ONE = 1
 GL_DST_COLOR = 0x0306
 GL_FLOAT = 0x1406
 GL_TRIANGLE_STRIP = 0x0005
 GL_VERTEX_SHADER = 0x8B31
 GL_FRAGMENT_SHADER = 0x8B30
+GL_BLEND_SRC_RGB = 0x80C9
+GL_BLEND_DST_RGB = 0x80C8
+GL_BLEND_SRC_ALPHA = 0x80CB
+GL_BLEND_DST_ALPHA = 0x80CA
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +164,28 @@ _gl_res = {
 
 
 # ---------------------------------------------------------------------------
+# Easing helpers
+# ---------------------------------------------------------------------------
+
+def _ease_out(t):
+    """
+    Ease-out (decelerate): fast start, slow end.
+    Uses sine curve: sin(t * PI/2).
+    t in [0,1] -> result in [0,1].
+    """
+    return math.sin(t * math.pi / 2.0)
+
+
+def _ease_in(t):
+    """
+    Ease-in (accelerate): slow start, fast end.
+    Uses cosine curve: 1 - cos(t * PI/2).
+    t in [0,1] -> result in [0,1].
+    """
+    return 1.0 - math.cos(t * math.pi / 2.0)
+
+
+# ---------------------------------------------------------------------------
 # GL darken shader - draws a full-screen quad that multiplies the
 # framebuffer by a uniform alpha value (0=black, 1=no change)
 # ---------------------------------------------------------------------------
@@ -216,11 +252,16 @@ def _init_gl_darken(plugin):
     )
 
 
-def _apply_darken(alpha_value):
+def _apply_darken(alpha_value, passes=2):
     """
-    Darken the current framebuffer by multiplying all pixels by alpha_value.
-    Uses GL_DST_COLOR blend: result = src_color * dst_color.
+    Darken the current framebuffer by multiplying all pixels by
+    alpha_value.  Uses GL_DST_COLOR blend: result = src_color * dst_color.
     Fragment outputs (alpha, alpha, alpha, 1) so result = dst * alpha.
+
+    With passes=2, effective darkening is alpha^2 - much deeper blacks
+    that hide the progress ring during the dark phase.
+
+    Saves and restores GL blend state to avoid side-effects.
     Must be called on the GL thread with an active EGL context.
     """
     if not _gl_res["initialized"]:
@@ -235,6 +276,18 @@ def _apply_darken(alpha_value):
     a_pos = _gl_res["a_pos"]
     vbo = _gl_res["vbo"]
 
+    # Save current blend state
+    from java.nio import IntBuffer
+    buf = IntBuffer.allocate(4)
+    blend_was_on = GLES20.glIsEnabled(GL_BLEND)
+    buf.position(0)
+    GLES20.glGetIntegerv(GL_BLEND_SRC_RGB, buf)
+    old_src = buf.get(0)
+    buf.position(0)
+    GLES20.glGetIntegerv(GL_BLEND_DST_RGB, buf)
+    old_dst = buf.get(0)
+
+    # Set up our blend mode
     GLES20.glEnable(GL_BLEND)
     GLES20.glBlendFunc(GL_DST_COLOR, GL_ZERO)
 
@@ -244,34 +297,58 @@ def _apply_darken(alpha_value):
     vbo.position(0)
     GLES20.glVertexAttribPointer(a_pos, 3, GL_FLOAT, False, 12, vbo)
     GLES20.glEnableVertexAttribArray(a_pos)
-    GLES20.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
-    GLES20.glDisableVertexAttribArray(a_pos)
 
+    # Draw multiple passes for deeper blacks
+    for _ in range(passes):
+        GLES20.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
+
+    GLES20.glDisableVertexAttribArray(a_pos)
     GLES20.glUseProgram(0)
-    GLES20.glDisable(GL_BLEND)
+
+    # Restore blend state
+    if not blend_was_on:
+        GLES20.glDisable(GL_BLEND)
+    else:
+        GLES20.glBlendFunc(old_src, old_dst)
 
 
 def _calc_fade_alpha():
     """
-    Calculate the current fade alpha (0=black, 1=full brightness).
-    Phase 1 (0 to half): 1.0 -> 0.0 (darken old camera)
-    Phase 2 (half to total): 0.0 -> 1.0 (brighten new)
+    Calculate the current fade alpha (0=black, 1=full brightness)
+    using cosine easing curves and a black hold period.
+
+    Timeline (for default 500ms, hold=60ms):
+      Phase 1 (0 to 220ms): ease-in 1.0 -> 0.0 (old camera darkens)
+      Hold    (220 to 280ms): alpha stays 0.0 (fully black)
+      Phase 2 (280 to 500ms): ease-out 0.0 -> 1.0 (new brightens)
+
+    The camera switch happens at the start of the hold period.
+
     Returns (alpha, should_switch_now, fade_complete)
     """
     half = _fade_half_ms
-    total = half * 2
+    hold = _HOLD_MS
+    total = half * 2 + hold
     elapsed = JSystem.currentTimeMillis() - _fade_state["start_time"]
 
     if elapsed >= total:
         return 1.0, False, True
 
+    # Phase 1: fade out (ease-in: slow start, fast end -> black)
     if elapsed < half:
-        alpha = 1.0 - (float(elapsed) / float(half))
+        t = float(elapsed) / float(half)
+        alpha = 1.0 - _ease_in(t)
         return max(0.0, min(1.0, alpha)), False, False
-    else:
-        alpha = float(elapsed - half) / float(half)
+
+    # Hold at black
+    if elapsed < half + hold:
         should_switch = not _fade_state["camera_switched"]
-        return max(0.0, min(1.0, alpha)), should_switch, False
+        return 0.0, should_switch, False
+
+    # Phase 2: fade in (ease-out: fast start, slow end -> full)
+    t = float(elapsed - half - hold) / float(half)
+    alpha = _ease_out(t)
+    return max(0.0, min(1.0, alpha)), False, False
 
 
 # ---------------------------------------------------------------------------
@@ -314,11 +391,13 @@ class _OverlayRenderHook(MethodHook):
                 _fade_state["camera_switched"] = True
                 self._schedule_switch()
 
-            _apply_darken(alpha)
+            # Apply darkening - double pass for deeper blacks
+            _apply_darken(alpha, passes=2)
 
             if self._logged_count < 5:
                 self.plugin.log(
-                    f"[SmoothFade] Video darken alpha={alpha:.2f}"
+                    f"[SmoothFade] Video darken alpha={alpha:.3f} "
+                    f"(eff={alpha*alpha:.4f})"
                 )
                 self._logged_count += 1
 
@@ -464,29 +543,54 @@ def _start_fade(plugin, icv):
     _fade_state["camera_switched"] = False
     _fade_state["icv"] = icv
     _fade_state["plugin"] = plugin
-    plugin.log(f"[SmoothFade] Fade activated (half={_fade_half_ms}ms)")
+    plugin.log(
+        f"[SmoothFade] Fade activated "
+        f"(half={_fade_half_ms}ms, hold={_HOLD_MS}ms)"
+    )
 
     half = _fade_half_ms
-    total = half * 2
+    hold = _HOLD_MS
+    total = half * 2 + hold
 
     # Animate the preview (sender sees fade via View alpha)
+    # Use AccelerateDecelerateInterpolator to match cosine easing
     try:
         container = _get_field(icv, "cameraContainer")
         if container is not None:
-            container.animate().setDuration(half).alpha(0.0).start()
-            plugin.log("[SmoothFade] Preview fade-out started")
+            AccDecInterp = find_class(
+                "android.view.animation"
+                ".AccelerateDecelerateInterpolator"
+            )
+            interp = None
+            if AccDecInterp is not None:
+                try:
+                    interp = AccDecInterp()
+                except Exception:
+                    pass
+
+            anim = container.animate().setDuration(half).alpha(0.0)
+            if interp is not None:
+                anim.setInterpolator(interp)
+            anim.start()
+            plugin.log("[SmoothFade] Preview fade-out started (eased)")
 
             def fade_in():
                 try:
                     if container is not None:
-                        container.animate().setDuration(
+                        anim2 = container.animate().setDuration(
                             half
-                        ).alpha(1.0).start()
+                        ).alpha(1.0)
+                        if interp is not None:
+                            anim2.setInterpolator(interp)
+                        anim2.start()
                     plugin.log("[SmoothFade] Preview fade-in started")
                 except Exception as e:
-                    plugin.log(f"[SmoothFade] Preview fade-in error: {e}")
+                    plugin.log(
+                        f"[SmoothFade] Preview fade-in error: {e}"
+                    )
 
-            run_on_ui_thread(fade_in, half + 50)
+            # Fade-in starts after fade-out + hold period
+            run_on_ui_thread(fade_in, half + hold + 50)
     except Exception as e:
         plugin.log(f"[SmoothFade] Preview anim error: {e}")
 
@@ -519,7 +623,7 @@ def _start_fade(plugin, icv):
 class SmoothCameraFadePlugin(BasePlugin):
 
     def on_plugin_load(self):
-        self.log("[SmoothFade] Loading v4.8.0...")
+        self.log("[SmoothFade] Loading v4.9.0...")
         self._load_duration_setting()
         self._setup_hooks()
         self.log("[SmoothFade] Plugin loaded")
@@ -634,7 +738,7 @@ class SmoothCameraFadePlugin(BasePlugin):
 
     def create_settings(self) -> List[Any]:
         return [
-            Header(text="Smooth Camera Fade v4.8"),
+            Header(text="Smooth Camera Fade v4.9"),
             Input(
                 key="fade_duration_ms",
                 text="Fade duration (ms)",
@@ -650,8 +754,9 @@ class SmoothCameraFadePlugin(BasePlugin):
             Text(
                 text="Smooth camera switch with dip-to-black animation "
                      "in round videos (CameraX mode).\n\n"
-                     "Phase 1: old camera fades to black\n"
-                     "Phase 2: new camera fades from black\n\n"
+                     "Phase 1: old camera fades to black (ease-in)\n"
+                     "Hold: screen stays black while camera switches\n"
+                     "Phase 2: new camera fades from black (ease-out)\n\n"
                      "The fade is visible to both sender and recipient."
             ),
         ]
