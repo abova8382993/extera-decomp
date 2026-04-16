@@ -1,5 +1,5 @@
 """
-Smooth Camera Fade Plugin v4.6 for exteraGram
+Smooth Camera Fade Plugin v4.7 for exteraGram
 
 Replaces the abrupt camera switch in round videos (CameraX non-dual
 mode) with a smooth "dip to black" transition, similar to iPhone.
@@ -27,7 +27,7 @@ __description__ = (
     "visible to both sender and recipient"
 )
 __author__ = "Devin"
-__version__ = "4.6.0"
+__version__ = "4.7.0"
 __icon__ = "exteraPlugins/1"
 __min_version__ = "11.12.0"
 
@@ -37,13 +37,23 @@ from java.lang import Class as JClass, System as JSystem
 from base_plugin import BasePlugin, MethodHook
 from hook_utils import find_class
 from android_utils import run_on_ui_thread, log
-from ui.settings import Header, Text
+from ui.settings import Header, Text, Selector, Divider
 from typing import List, Any
 
 
-# Fade duration: 250ms fade-out + 250ms fade-in = 500ms total
-FADE_HALF_MS = 250
-FADE_TOTAL_MS = FADE_HALF_MS * 2
+# Duration presets: (label, half_ms) — total = half_ms * 2
+_DURATION_PRESETS = [
+    ("200ms (very fast)", 100),
+    ("300ms (fast)", 150),
+    ("400ms", 200),
+    ("500ms (default)", 250),
+    ("750ms (slow)", 375),
+    ("1000ms (very slow)", 500),
+]
+_DEFAULT_DURATION_INDEX = 3  # 500ms
+
+# Current fade half-duration (updated from settings)
+_fade_half_ms = _DURATION_PRESETS[_DEFAULT_DURATION_INDEX][1]
 
 # GLES20 constants
 GL_BLEND = 0x0BE2
@@ -251,20 +261,22 @@ def _apply_darken(alpha_value):
 def _calc_fade_alpha():
     """
     Calculate the current fade alpha (0=black, 1=full brightness).
-    Phase 1 (0 to FADE_HALF_MS): 1.0 -> 0.0 (darken old camera)
-    Phase 2 (FADE_HALF_MS to FADE_TOTAL_MS): 0.0 -> 1.0 (brighten new)
+    Phase 1 (0 to half): 1.0 -> 0.0 (darken old camera)
+    Phase 2 (half to total): 0.0 -> 1.0 (brighten new)
     Returns (alpha, should_switch_now, fade_complete)
     """
+    half = _fade_half_ms
+    total = half * 2
     elapsed = JSystem.currentTimeMillis() - _fade_state["start_time"]
 
-    if elapsed >= FADE_TOTAL_MS:
+    if elapsed >= total:
         return 1.0, False, True
 
-    if elapsed < FADE_HALF_MS:
-        alpha = 1.0 - (float(elapsed) / float(FADE_HALF_MS))
+    if elapsed < half:
+        alpha = 1.0 - (float(elapsed) / float(half))
         return max(0.0, min(1.0, alpha)), False, False
     else:
-        alpha = float(elapsed - FADE_HALF_MS) / float(FADE_HALF_MS)
+        alpha = float(elapsed - half) / float(half)
         should_switch = not _fade_state["camera_switched"]
         return max(0.0, min(1.0, alpha)), should_switch, False
 
@@ -296,6 +308,12 @@ class _OverlayRenderHook(MethodHook):
 
             if complete:
                 _fade_state["active"] = False
+                self._logged_count = 0
+                # Reset flipAnimationInProgress immediately so the
+                # button isn't stuck until the delayed cleanup fires
+                icv = _fade_state["icv"]
+                if icv is not None:
+                    _set_bool_field(icv, "flipAnimationInProgress", False)
                 self.plugin.log("[SmoothFade] Video fade complete")
                 return
 
@@ -315,6 +333,10 @@ class _OverlayRenderHook(MethodHook):
             self.plugin.log(f"[SmoothFade] Render hook error: {e}")
             self.plugin.log(traceback.format_exc())
             _fade_state["active"] = False
+            # Ensure button is never permanently stuck
+            icv = _fade_state["icv"]
+            if icv is not None:
+                _set_bool_field(icv, "flipAnimationInProgress", False)
 
     def _schedule_switch(self):
         """Schedule camera switch on UI thread (can't call from GL thread)."""
@@ -447,24 +469,27 @@ def _start_fade(plugin, icv):
     _fade_state["plugin"] = plugin
     plugin.log("[SmoothFade] Fade activated (dip-to-black)")
 
+    half = _fade_half_ms
+    total = half * 2
+
     # Animate the preview (sender sees fade via View alpha)
     try:
         container = _get_field(icv, "cameraContainer")
         if container is not None:
-            container.animate().setDuration(FADE_HALF_MS).alpha(0.0).start()
+            container.animate().setDuration(half).alpha(0.0).start()
             plugin.log("[SmoothFade] Preview fade-out started")
 
             def fade_in():
                 try:
                     if container is not None:
                         container.animate().setDuration(
-                            FADE_HALF_MS
+                            half
                         ).alpha(1.0).start()
                     plugin.log("[SmoothFade] Preview fade-in started")
                 except Exception as e:
                     plugin.log(f"[SmoothFade] Preview fade-in error: {e}")
 
-            run_on_ui_thread(fade_in, FADE_HALF_MS + 50)
+            run_on_ui_thread(fade_in, half + 50)
     except Exception as e:
         plugin.log(f"[SmoothFade] Preview anim error: {e}")
 
@@ -487,7 +512,7 @@ def _start_fade(plugin, icv):
         except Exception as e:
             plugin.log(f"[SmoothFade] Cleanup error: {e}")
 
-    run_on_ui_thread(cleanup, FADE_TOTAL_MS + 300)
+    run_on_ui_thread(cleanup, total + 300)
 
 
 # ---------------------------------------------------------------------------
@@ -497,9 +522,26 @@ def _start_fade(plugin, icv):
 class SmoothCameraFadePlugin(BasePlugin):
 
     def on_plugin_load(self):
-        self.log("[SmoothFade] Loading v4.6.0...")
+        self.log("[SmoothFade] Loading v4.7.0...")
+        self._load_duration_setting()
         self._setup_hooks()
         self.log("[SmoothFade] Plugin loaded")
+
+    def _load_duration_setting(self):
+        """Restore saved fade duration from persistent settings."""
+        global _fade_half_ms
+        try:
+            idx = self.get_setting(
+                "fade_duration", _DEFAULT_DURATION_INDEX
+            )
+            if 0 <= idx < len(_DURATION_PRESETS):
+                _fade_half_ms = _DURATION_PRESETS[idx][1]
+                self.log(
+                    f"[SmoothFade] Duration: "
+                    f"{_DURATION_PRESETS[idx][0]} (half={_fade_half_ms}ms)"
+                )
+        except Exception as e:
+            self.log(f"[SmoothFade] Duration load error: {e}")
 
     def _setup_hooks(self):
         # Hook 1: lambda$new$2 on InstantCameraView
@@ -579,17 +621,32 @@ class SmoothCameraFadePlugin(BasePlugin):
         _fade_state["icv"] = None
         self.log("[SmoothFade] Plugin unloaded")
 
+    def _on_duration_change(self, new_index):
+        global _fade_half_ms
+        if 0 <= new_index < len(_DURATION_PRESETS):
+            label, half = _DURATION_PRESETS[new_index]
+            _fade_half_ms = half
+            self.log(
+                f"[SmoothFade] Duration changed: {label} "
+                f"(half={half}ms, total={half * 2}ms)"
+            )
+
     def create_settings(self) -> List[Any]:
         return [
-            Header(text="Smooth Camera Fade v4.6"),
+            Header(text="Smooth Camera Fade v4.7"),
+            Selector(
+                key="fade_duration",
+                text="Fade duration",
+                default=_DEFAULT_DURATION_INDEX,
+                items=[p[0] for p in _DURATION_PRESETS],
+                on_change=self._on_duration_change,
+            ),
+            Divider(),
             Text(
                 text="Smooth camera switch with dip-to-black animation "
                      "in round videos (CameraX mode).\n\n"
-                     "Hooks the video encoder overlay renderer to "
-                     "darken frames during the transition, making the "
-                     "fade visible to the recipient.\n\n"
-                     "Phase 1: old camera fades to black (250ms)\n"
-                     "Phase 2: new camera fades from black (250ms)\n\n"
-                     "Check logs: adb logcat | grep SmoothFade"
+                     "Phase 1: old camera fades to black\n"
+                     "Phase 2: new camera fades from black\n\n"
+                     "The fade is visible to both sender and recipient."
             ),
         ]
