@@ -1,22 +1,16 @@
 """
-Smooth Camera Fade Plugin v4.3 for exteraGram
+Smooth Camera Fade Plugin v4.4 for exteraGram
 
 Replaces the abrupt camera switch in round videos (CameraX non-dual
 mode) with a smooth fade transition, similar to iPhone.
 
-v4.3 key insight: The GL renderer has built-in crossfade logic in its
-onDraw() method, triggered by reinitForNewCamera(). This saves the old
-texture, sets cameraTextureAlpha=0, creates a new texture, and the GL
-renderer automatically crossfades from old to new. This crossfade is
-encoded into the video file, making it visible to the recipient.
+v4.4: Hook CameraGLThread.onDraw to control cameraTextureAlpha on
+EVERY GL frame. This ensures a slow, visible crossfade that is
+encoded into the video file (visible to recipient).
 
-For CameraX non-dual, the original code calls switchCameraX() which
-does NOT trigger reinitForNewCamera(), so there's no crossfade.
-This plugin instead uses the Camera2-style path:
-  1. Save last frame as bitmap overlay (screen continuity)
-  2. Toggle isFrontface
-  3. Call reinitForNewCamera() (triggers GL crossfade in video)
-  4. The GL thread creates a new CameraXSession with the new facing
+The built-in GL crossfade (triggered by reinitForNewCamera) increases
+cameraTextureAlpha too fast (~200ms). By hooking onDraw and overriding
+the alpha value each frame, we stretch the crossfade to 500ms.
 """
 
 __id__ = "smooth_camera_fade"
@@ -26,18 +20,22 @@ __description__ = (
     "visible to both sender and recipient"
 )
 __author__ = "Devin"
-__version__ = "4.3.0"
+__version__ = "4.4.0"
 __icon__ = "exteraPlugins/1"
 __min_version__ = "11.12.0"
 
 import traceback
-from java.lang import Class as JClass
+from java.lang import Class as JClass, System as JSystem
 
 from base_plugin import BasePlugin, MethodHook
 from hook_utils import find_class
 from android_utils import run_on_ui_thread, log
 from ui.settings import Header, Text
 from typing import List, Any
+
+
+# Crossfade duration in milliseconds
+CROSSFADE_MS = 500
 
 
 # ---------------------------------------------------------------------------
@@ -110,36 +108,97 @@ def _call_method(obj, method_name):
 
 
 # ---------------------------------------------------------------------------
-# Core: camera switch via reinitForNewCamera (Camera2-style GL crossfade)
+# Shared fade state (accessed by both hooks)
 # ---------------------------------------------------------------------------
 
-def _do_camerax_reinit_fade(plugin, icv):
+_fade_state = {
+    "active": False,
+    "start_time": 0,
+}
+
+
+# ---------------------------------------------------------------------------
+# Hook 1: CameraGLThread.onDraw - control cameraTextureAlpha per frame
+# ---------------------------------------------------------------------------
+
+class _OnDrawHook(MethodHook):
     """
-    Switch CameraX camera using the Camera2-style reinitForNewCamera path.
-
-    This triggers the GL crossfade mechanism:
-      - Old texture saved in oldCameraTexture[0]
-      - cameraTextureAlpha set to 0
-      - New texture created, new CameraXSession initialized
-      - GL onDraw() automatically crossfades old->new (encoded in video!)
-
-    Screen continuity via saveLastCameraBitmap + textureOverlayView.
+    Runs on the GL thread before each frame is drawn.
+    When a fade is active, overrides cameraTextureAlpha to control
+    the crossfade speed. This alpha is used by the GL renderer
+    to blend old and new camera textures - affecting the encoded video.
     """
 
-    # 1. Lottie icon animation
+    def __init__(self, plugin):
+        self.plugin = plugin
+        self._logged_first = False
+
+    def before_hooked_method(self, param):
+        if not _fade_state["active"]:
+            return
+
+        try:
+            gl_thread = param.thisObject
+
+            # Get InstantCameraView from inner class (this$0)
+            icv = _get_field(gl_thread, "this$0")
+            if icv is None:
+                return
+
+            elapsed = JSystem.currentTimeMillis() - _fade_state["start_time"]
+
+            if elapsed >= CROSSFADE_MS:
+                _set_float_field(icv, "cameraTextureAlpha", 1.0)
+                _fade_state["active"] = False
+                self.plugin.log("[SmoothFade] GL fade complete")
+                return
+
+            # Calculate alpha: 0 -> 1 over CROSSFADE_MS
+            alpha = float(elapsed) / float(CROSSFADE_MS)
+            if alpha < 0.0:
+                alpha = 0.0
+            elif alpha > 1.0:
+                alpha = 1.0
+
+            # Override cameraTextureAlpha BEFORE onDraw reads it
+            _set_float_field(icv, "cameraTextureAlpha", alpha)
+
+            if not self._logged_first:
+                self.plugin.log(f"[SmoothFade] GL fade active, alpha={alpha:.2f}")
+                self._logged_first = True
+
+        except Exception:
+            _fade_state["active"] = False
+
+
+# ---------------------------------------------------------------------------
+# Core: camera switch via reinitForNewCamera + slow GL crossfade
+# ---------------------------------------------------------------------------
+
+def _do_camerax_fade(plugin, icv):
+    """
+    Switch CameraX camera with visible fade in the video.
+
+    1. saveLastCameraBitmap + overlay (screen continuity)
+    2. Toggle isFrontface
+    3. reinitForNewCamera() saves old texture, sets alpha=0, creates new
+    4. onDraw hook controls cameraTextureAlpha: 0->1 over 500ms
+    5. GL renderer crossfades old->new texture (encoded in video!)
+    """
+
+    # Lottie icon animation
     try:
         drawable = _get_field(icv, "switchCameraDrawable")
         if drawable is not None:
             drawable.setCurrentFrame(0)
             drawable.start()
     except Exception as e:
-        plugin.log(f"[SmoothFade] Lottie error (non-fatal): {e}")
+        plugin.log(f"[SmoothFade] Lottie error: {e}")
 
-    # 2. Prevent double-tap
+    # Prevent double-tap
     _set_bool_field(icv, "flipAnimationInProgress", True)
-    plugin.log("[SmoothFade] flipAnimationInProgress = true")
 
-    # 3. Save last camera frame as bitmap overlay (screen continuity)
+    # Save last frame as bitmap overlay (screen continuity)
     overlay = _get_field(icv, "textureOverlayView")
     try:
         _call_method(icv, "saveLastCameraBitmap")
@@ -148,64 +207,59 @@ def _do_camerax_reinit_fade(plugin, icv):
             _set_bool_field(icv, "needDrawFlickerStub", False)
             overlay.setImageBitmap(last_bitmap)
             overlay.setAlpha(1.0)
-            plugin.log("[SmoothFade] Overlay set with last frame bitmap")
-        else:
-            plugin.log(f"[SmoothFade] Overlay: bitmap={last_bitmap is not None}, overlay={overlay is not None}")
+            plugin.log("[SmoothFade] Overlay set")
     except Exception as e:
-        plugin.log(f"[SmoothFade] Overlay error (non-fatal): {e}")
+        plugin.log(f"[SmoothFade] Overlay error: {e}")
 
-    # 4. Toggle isFrontface (replicate switchCameraX logic)
+    # Toggle isFrontface
     is_front = _get_field(icv, "isFrontface")
     new_front = not bool(is_front)
     _set_bool_field(icv, "isFrontface", new_front)
     plugin.log(f"[SmoothFade] isFrontface: {is_front} -> {new_front}")
 
-    # 5. Update flash state
+    # Update flash
     try:
         _call_method(icv, "updateFlash")
-    except Exception as e:
-        plugin.log(f"[SmoothFade] updateFlash error: {e}")
+    except Exception:
+        pass
 
-    # 6. Mark camera not ready
+    # Mark camera not ready
     _set_bool_field(icv, "cameraReady", False)
     _set_float_field(icv, "cameraZoom", 0.0)
 
-    # 7. Call reinitForNewCamera() on the GL thread
-    #    This is the KEY step - it triggers the GL crossfade:
-    #    - Saves oldCameraTexture[0] = cameraTexture[0]
-    #    - Sets cameraTextureAlpha = 0
-    #    - Creates new SurfaceTexture + GL texture
-    #    - Calls createCamera(0, newSurface) which creates
-    #      a new CameraXSession with the toggled isFrontface
-    #    - GL onDraw() crossfades old->new texture (in video!)
+    # Activate GL fade BEFORE calling reinitForNewCamera
+    _fade_state["active"] = True
+    _fade_state["start_time"] = JSystem.currentTimeMillis()
+    plugin.log("[SmoothFade] Fade state activated")
+
+    # reinitForNewCamera(): saves old texture, creates new texture+camera
+    # The onDraw hook controls crossfade speed (500ms instead of ~200ms)
     camera_thread = _get_field(icv, "cameraThread")
     if camera_thread is not None:
         _call_method(camera_thread, "reinitForNewCamera")
-        plugin.log("[SmoothFade] reinitForNewCamera() called - GL crossfade triggered!")
+        plugin.log("[SmoothFade] reinitForNewCamera() called")
     else:
-        plugin.log("[SmoothFade] ERROR: cameraThread is null!")
+        plugin.log("[SmoothFade] ERROR: cameraThread null!")
+        _fade_state["active"] = False
         _set_bool_field(icv, "isFrontface", bool(is_front))
         _set_bool_field(icv, "flipAnimationInProgress", False)
         return
 
-    # 8. Cleanup after transition completes
-    #    The GL thread's onDraw already fades out the overlay
-    #    (see lambda$onDraw$1 in source), but we set a safety
-    #    timeout to ensure flipAnimationInProgress is cleared.
+    # Cleanup after crossfade
     def cleanup():
         try:
+            _fade_state["active"] = False
+            _set_float_field(icv, "cameraTextureAlpha", 1.0)
             _set_bool_field(icv, "flipAnimationInProgress", False)
-            plugin.log("[SmoothFade] Cleanup: flipAnimationInProgress = false")
+            plugin.log("[SmoothFade] Cleanup done")
         except Exception as e:
             plugin.log(f"[SmoothFade] Cleanup error: {e}")
 
-    # 800ms should be enough for GL crossfade to complete
-    run_on_ui_thread(cleanup, 800)
-    plugin.log("[SmoothFade] Transition scheduled")
+    run_on_ui_thread(cleanup, CROSSFADE_MS + 200)
 
 
 # ---------------------------------------------------------------------------
-# Hook
+# Hook 2: lambda$new$2 - intercept camera switch button
 # ---------------------------------------------------------------------------
 
 class _CameraFadeHook(MethodHook):
@@ -230,10 +284,9 @@ class _CameraFadeHook(MethodHook):
             self.plugin.log(f"[SmoothFade] cameraType={camera_type}")
 
             if camera_type is None or int(camera_type) != 2:
-                self.plugin.log("[SmoothFade] Not CameraX, original runs")
                 return
 
-            # Check dual mode - if dual, let original handle it
+            # Check dual mode
             is_dual = False
             try:
                 dcv_class = JClass.forName(
@@ -247,41 +300,30 @@ class _CameraFadeHook(MethodHook):
                 context = param.args[0]
                 is_dual = bool(m.invoke(None, [context]))
             except Exception:
-                pass  # If check fails, assume non-dual
+                pass
 
             if is_dual:
-                self.plugin.log("[SmoothFade] Dual mode, original runs")
                 return
 
-            # Check not already animating
+            # Check guards
             flip = _get_field(icv, "flipAnimationInProgress")
-            self.plugin.log(f"[SmoothFade] flipInProgress={flip}")
-
             if flip:
-                self.plugin.log("[SmoothFade] Already animating, block")
                 param.setResult(None)
                 return
 
-            # Check camera is ready
             camera_ready = _get_field(icv, "cameraReady")
             if not camera_ready:
-                self.plugin.log("[SmoothFade] Camera not ready, block")
                 param.setResult(None)
                 return
 
-            self.plugin.log("[SmoothFade] Intercepting! Using reinitForNewCamera...")
+            self.plugin.log("[SmoothFade] Intercepting!")
 
-            # Use the Camera2-style reinit path for GL crossfade
-            _do_camerax_reinit_fade(self.plugin, icv)
-
-            # Block the original method
+            _do_camerax_fade(self.plugin, icv)
             param.setResult(None)
-            self.plugin.log("[SmoothFade] Original blocked")
 
         except Exception as e:
             self.plugin.log(f"[SmoothFade] Hook error: {e}")
             self.plugin.log(traceback.format_exc())
-            # Do NOT setResult - original runs as fallback
 
 
 # ---------------------------------------------------------------------------
@@ -291,42 +333,84 @@ class _CameraFadeHook(MethodHook):
 class SmoothCameraFadePlugin(BasePlugin):
 
     def on_plugin_load(self):
-        self.log("[SmoothFade] Loading v4.3.0...")
+        self.log("[SmoothFade] Loading v4.4.0...")
         self._setup_hooks()
         self.log("[SmoothFade] Plugin loaded")
 
     def _setup_hooks(self):
+        # Hook 1: lambda$new$2 on InstantCameraView
         ICV = find_class("org.telegram.ui.Components.InstantCameraView")
-        self.log(f"[SmoothFade] find_class(ICV) = {ICV}")
+        self.log(f"[SmoothFade] ICV = {ICV}")
 
         if ICV is None:
             self.log("[SmoothFade] ERROR: InstantCameraView not found!")
             return
 
         try:
-            hook = _CameraFadeHook(self)
-            unhooks = self.hook_all_methods(
-                ICV, "lambda$new$2", hook, priority=50
-            )
-            count = len(unhooks) if unhooks else 0
-            self.log(f"[SmoothFade] hook_all_methods: {count}")
+            hook1 = _CameraFadeHook(self)
+            u1 = self.hook_all_methods(ICV, "lambda$new$2", hook1, priority=50)
+            c1 = len(u1) if u1 else 0
+            self.log(f"[SmoothFade] lambda$new$2 hooks: {c1}")
         except Exception as e:
-            self.log(f"[SmoothFade] hook_all_methods failed: {e}")
+            self.log(f"[SmoothFade] lambda$new$2 hook failed: {e}")
+
+        # Hook 2: onDraw on CameraGLThread (inner class)
+        GLT = find_class(
+            "org.telegram.ui.Components.InstantCameraView$CameraGLThread"
+        )
+        self.log(f"[SmoothFade] CameraGLThread = {GLT}")
+
+        if GLT is None:
+            self.log("[SmoothFade] WARNING: CameraGLThread not found!")
+            self.log("[SmoothFade] Trying alternative names...")
+            # Try without $ separator (R8 might flatten)
+            for name in ["CameraGLThread", "onDraw"]:
+                self.log(f"[SmoothFade] (no alternative found for {name})")
+            return
+
+        try:
+            hook2 = _OnDrawHook(self)
+            u2 = self.hook_all_methods(GLT, "onDraw", hook2, priority=50)
+            c2 = len(u2) if u2 else 0
+            self.log(f"[SmoothFade] onDraw hooks: {c2}")
+
+            if c2 == 0:
+                self.log("[SmoothFade] WARNING: 0 onDraw hooked!")
+                # Diagnostic: list draw/render methods
+                try:
+                    real_cls = JClass.forName(
+                        "org.telegram.ui.Components"
+                        ".InstantCameraView$CameraGLThread"
+                    )
+                    methods = real_cls.getDeclaredMethods()
+                    names = set()
+                    for m_obj in methods:
+                        names.add(str(m_obj.getName()))
+                    draw_names = sorted(
+                        n for n in names
+                        if "draw" in n.lower() or "render" in n.lower()
+                    )
+                    self.log(f"[SmoothFade] GLT draw methods: {draw_names}")
+                    self.log(f"[SmoothFade] GLT all methods: {sorted(names)}")
+                except Exception as e2:
+                    self.log(f"[SmoothFade] Method listing error: {e2}")
+        except Exception as e:
+            self.log(f"[SmoothFade] onDraw hook failed: {e}")
             self.log(traceback.format_exc())
 
     def on_plugin_unload(self):
+        _fade_state["active"] = False
         self.log("[SmoothFade] Plugin unloaded")
 
     def create_settings(self) -> List[Any]:
         return [
-            Header(text="Smooth Camera Fade v4.3"),
+            Header(text="Smooth Camera Fade v4.4"),
             Text(
-                text="Replaces the abrupt camera switch with a smooth "
-                     "fade when switching cameras during round video "
-                     "recording (CameraX mode).\n\n"
-                     "Uses reinitForNewCamera for GL-level crossfade "
-                     "that is encoded into the video file, making the "
-                     "fade visible to both you and the recipient.\n\n"
+                text="Smooth camera switch with fade animation in "
+                     "round videos (CameraX mode).\n\n"
+                     "Hooks into GL rendering to control crossfade "
+                     "speed, making it visible in the encoded video "
+                     "(recipient sees the fade too).\n\n"
                      "Check logs: adb logcat | grep SmoothFade"
             ),
         ]
