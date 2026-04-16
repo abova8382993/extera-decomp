@@ -1,5 +1,5 @@
 """
-Smooth Camera Fade Plugin v4.5 for exteraGram
+Smooth Camera Fade Plugin v4.6 for exteraGram
 
 Replaces the abrupt camera switch in round videos (CameraX non-dual
 mode) with a smooth "dip to black" transition, similar to iPhone.
@@ -27,7 +27,7 @@ __description__ = (
     "visible to both sender and recipient"
 )
 __author__ = "Devin"
-__version__ = "4.5.0"
+__version__ = "4.6.0"
 __icon__ = "exteraPlugins/1"
 __min_version__ = "11.12.0"
 
@@ -171,7 +171,10 @@ def _init_gl_darken(plugin):
     """Create the GL shader program for darkening. Called on GL thread."""
     from java.nio import ByteBuffer, ByteOrder
 
-    GLES20 = JClass.forName("android.opengl.GLES20")
+    GLES20 = find_class("android.opengl.GLES20")
+    if GLES20 is None:
+        plugin.log("[SmoothFade] ERROR: GLES20 class not found!")
+        return
 
     vs = GLES20.glCreateShader(GL_VERTEX_SHADER)
     GLES20.glShaderSource(vs, _DARKEN_VERT)
@@ -220,7 +223,9 @@ def _apply_darken(alpha_value):
     if not _gl_res["initialized"]:
         return
 
-    GLES20 = JClass.forName("android.opengl.GLES20")
+    GLES20 = find_class("android.opengl.GLES20")
+    if GLES20 is None:
+        return
 
     prog = _gl_res["program"]
     u_alpha = _gl_res["u_alpha"]
@@ -295,7 +300,8 @@ class _OverlayRenderHook(MethodHook):
                 return
 
             if should_switch:
-                self._do_switch()
+                _fade_state["camera_switched"] = True
+                self._schedule_switch()
 
             _apply_darken(alpha)
 
@@ -310,36 +316,43 @@ class _OverlayRenderHook(MethodHook):
             self.plugin.log(traceback.format_exc())
             _fade_state["active"] = False
 
-    def _do_switch(self):
-        """Switch the CameraX camera at the fade midpoint."""
-        _fade_state["camera_switched"] = True
-        icv = _fade_state["icv"]
-        if icv is None:
-            return
+    def _schedule_switch(self):
+        """Schedule camera switch on UI thread (can't call from GL thread)."""
+        plugin = self.plugin
 
-        try:
-            is_front = _get_field(icv, "isFrontface")
-            new_front = not bool(is_front)
-            _set_bool_field(icv, "isFrontface", new_front)
-            self.plugin.log(f"[SmoothFade] Switch: {is_front} -> {new_front}")
-
+        def do_switch():
+            icv = _fade_state["icv"]
+            if icv is None:
+                return
             try:
-                _call_method(icv, "updateFlash")
-            except Exception:
-                pass
+                is_front = _get_field(icv, "isFrontface")
+                new_front = not bool(is_front)
+                _set_bool_field(icv, "isFrontface", new_front)
+                plugin.log(
+                    f"[SmoothFade] Switch: {is_front} -> {new_front}"
+                )
 
-            _set_bool_field(icv, "cameraReady", False)
-            _set_float_field(icv, "cameraZoom", 0.0)
+                try:
+                    _call_method(icv, "updateFlash")
+                except Exception:
+                    pass
 
-            session = _get_field(icv, "cameraXSession")
-            if session is not None:
-                _call_method(session, "switchCamera")
-                self.plugin.log("[SmoothFade] switchCamera() called")
-            else:
-                self.plugin.log("[SmoothFade] ERROR: cameraXSession null!")
+                _set_bool_field(icv, "cameraReady", False)
+                _set_float_field(icv, "cameraZoom", 0.0)
 
-        except Exception as e:
-            self.plugin.log(f"[SmoothFade] Switch error: {e}")
+                session = _get_field(icv, "cameraXSession")
+                if session is not None:
+                    _call_method(session, "switchCamera")
+                    plugin.log("[SmoothFade] switchCamera() called")
+                else:
+                    plugin.log(
+                        "[SmoothFade] ERROR: cameraXSession null!"
+                    )
+
+            except Exception as e:
+                plugin.log(f"[SmoothFade] Switch error: {e}")
+
+        run_on_ui_thread(do_switch)
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +497,7 @@ def _start_fade(plugin, icv):
 class SmoothCameraFadePlugin(BasePlugin):
 
     def on_plugin_load(self):
-        self.log("[SmoothFade] Loading v4.5.0...")
+        self.log("[SmoothFade] Loading v4.6.0...")
         self._setup_hooks()
         self.log("[SmoothFade] Plugin loaded")
 
@@ -568,7 +581,7 @@ class SmoothCameraFadePlugin(BasePlugin):
 
     def create_settings(self) -> List[Any]:
         return [
-            Header(text="Smooth Camera Fade v4.5"),
+            Header(text="Smooth Camera Fade v4.6"),
             Text(
                 text="Smooth camera switch with dip-to-black animation "
                      "in round videos (CameraX mode).\n\n"
