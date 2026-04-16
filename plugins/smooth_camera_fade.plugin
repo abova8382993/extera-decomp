@@ -1,16 +1,23 @@
 """
-Smooth Camera Fade Plugin v4.4 for exteraGram
+Smooth Camera Fade Plugin v4.5 for exteraGram
 
 Replaces the abrupt camera switch in round videos (CameraX non-dual
-mode) with a smooth fade transition, similar to iPhone.
+mode) with a smooth "dip to black" transition, similar to iPhone.
 
-v4.4: Hook CameraGLThread.onDraw to control cameraTextureAlpha on
-EVERY GL frame. This ensures a slow, visible crossfade that is
-encoded into the video file (visible to recipient).
+v4.5 key insight: CameraGLThread (preview) and VideoRecorder (encoded
+video) have SEPARATE GL rendering pipelines. Previous versions only
+affected the preview. This version hooks BOTH pipelines:
 
-The built-in GL crossfade (triggered by reinitForNewCamera) increases
-cameraTextureAlpha too fast (~200ms). By hooking onDraw and overriding
-the alpha value each frame, we stretch the crossfade to 500ms.
+  1. Hook lambda$new$2 -> intercept camera switch, delay actual switch
+  2. Hook InstantCameraVideoEncoderOverlayHelper.render() -> darken
+     each encoded video frame using GL multiply blend
+  3. Phase 1 (0-250ms): old camera darkens to black
+  4. At 250ms: switchCameraX() switches the actual camera
+  5. Phase 2 (250-500ms): new camera brightens from black
+
+The darken effect uses a GL shader that draws a full-screen quad
+multiplied by fadeAlpha, applied AFTER the normal frame + overlay
+render but BEFORE eglSwapBuffers.
 """
 
 __id__ = "smooth_camera_fade"
@@ -20,7 +27,7 @@ __description__ = (
     "visible to both sender and recipient"
 )
 __author__ = "Devin"
-__version__ = "4.4.0"
+__version__ = "4.5.0"
 __icon__ = "exteraPlugins/1"
 __min_version__ = "11.12.0"
 
@@ -34,8 +41,18 @@ from ui.settings import Header, Text
 from typing import List, Any
 
 
-# Crossfade duration in milliseconds
-CROSSFADE_MS = 500
+# Fade duration: 250ms fade-out + 250ms fade-in = 500ms total
+FADE_HALF_MS = 250
+FADE_TOTAL_MS = FADE_HALF_MS * 2
+
+# GLES20 constants
+GL_BLEND = 0x0BE2
+GL_ZERO = 0
+GL_DST_COLOR = 0x0306
+GL_FLOAT = 0x1406
+GL_TRIANGLE_STRIP = 0x0005
+GL_VERTEX_SHADER = 0x8B31
+GL_FRAGMENT_SHADER = 0x8B30
 
 
 # ---------------------------------------------------------------------------
@@ -108,154 +125,221 @@ def _call_method(obj, method_name):
 
 
 # ---------------------------------------------------------------------------
-# Shared fade state (accessed by both hooks)
+# Shared fade state (accessed by multiple hooks and threads)
 # ---------------------------------------------------------------------------
 
 _fade_state = {
     "active": False,
     "start_time": 0,
+    "camera_switched": False,
+    "icv": None,
+    "plugin": None,
+}
+
+# GL resources for the darken shader (created lazily on encoder thread)
+_gl_res = {
+    "program": 0,
+    "u_alpha": -1,
+    "a_pos": -1,
+    "vbo": None,
+    "initialized": False,
 }
 
 
 # ---------------------------------------------------------------------------
-# Hook 1: CameraGLThread.onDraw - control cameraTextureAlpha per frame
+# GL darken shader - draws a full-screen quad that multiplies the
+# framebuffer by a uniform alpha value (0=black, 1=no change)
 # ---------------------------------------------------------------------------
 
-class _OnDrawHook(MethodHook):
+_DARKEN_VERT = (
+    "attribute vec4 aPosition;\n"
+    "void main() {\n"
+    "    gl_Position = aPosition;\n"
+    "}\n"
+)
+
+_DARKEN_FRAG = (
+    "precision lowp float;\n"
+    "uniform float uAlpha;\n"
+    "void main() {\n"
+    "    gl_FragColor = vec4(uAlpha, uAlpha, uAlpha, 1.0);\n"
+    "}\n"
+)
+
+
+def _init_gl_darken(plugin):
+    """Create the GL shader program for darkening. Called on GL thread."""
+    from java.nio import ByteBuffer, ByteOrder
+
+    GLES20 = JClass.forName("android.opengl.GLES20")
+
+    vs = GLES20.glCreateShader(GL_VERTEX_SHADER)
+    GLES20.glShaderSource(vs, _DARKEN_VERT)
+    GLES20.glCompileShader(vs)
+
+    fs = GLES20.glCreateShader(GL_FRAGMENT_SHADER)
+    GLES20.glShaderSource(fs, _DARKEN_FRAG)
+    GLES20.glCompileShader(fs)
+
+    prog = GLES20.glCreateProgram()
+    GLES20.glAttachShader(prog, vs)
+    GLES20.glAttachShader(prog, fs)
+    GLES20.glLinkProgram(prog)
+
+    _gl_res["program"] = int(prog)
+    _gl_res["u_alpha"] = int(GLES20.glGetUniformLocation(prog, "uAlpha"))
+    _gl_res["a_pos"] = int(GLES20.glGetAttribLocation(prog, "aPosition"))
+
+    # Full-screen quad: two triangles covering [-1,-1] to [1,1]
+    verts = [-1.0, -1.0, 0.0,
+              1.0, -1.0, 0.0,
+             -1.0,  1.0, 0.0,
+              1.0,  1.0, 0.0]
+
+    bb = ByteBuffer.allocateDirect(len(verts) * 4)
+    bb.order(ByteOrder.nativeOrder())
+    fb = bb.asFloatBuffer()
+    fb.put(verts)
+    fb.position(0)
+    _gl_res["vbo"] = fb
+
+    _gl_res["initialized"] = True
+    plugin.log(
+        f"[SmoothFade] GL darken shader: prog={prog} "
+        f"uAlpha={_gl_res['u_alpha']} aPos={_gl_res['a_pos']}"
+    )
+
+
+def _apply_darken(alpha_value):
     """
-    Runs on the GL thread before each frame is drawn.
-    When a fade is active, overrides cameraTextureAlpha to control
-    the crossfade speed. This alpha is used by the GL renderer
-    to blend old and new camera textures - affecting the encoded video.
+    Darken the current framebuffer by multiplying all pixels by alpha_value.
+    Uses GL_DST_COLOR blend: result = src_color * dst_color.
+    Fragment outputs (alpha, alpha, alpha, 1) so result = dst * alpha.
+    Must be called on the GL thread with an active EGL context.
+    """
+    if not _gl_res["initialized"]:
+        return
+
+    GLES20 = JClass.forName("android.opengl.GLES20")
+
+    prog = _gl_res["program"]
+    u_alpha = _gl_res["u_alpha"]
+    a_pos = _gl_res["a_pos"]
+    vbo = _gl_res["vbo"]
+
+    GLES20.glEnable(GL_BLEND)
+    GLES20.glBlendFunc(GL_DST_COLOR, GL_ZERO)
+
+    GLES20.glUseProgram(prog)
+    GLES20.glUniform1f(u_alpha, float(alpha_value))
+
+    vbo.position(0)
+    GLES20.glVertexAttribPointer(a_pos, 3, GL_FLOAT, False, 12, vbo)
+    GLES20.glEnableVertexAttribArray(a_pos)
+    GLES20.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
+    GLES20.glDisableVertexAttribArray(a_pos)
+
+    GLES20.glUseProgram(0)
+    GLES20.glDisable(GL_BLEND)
+
+
+def _calc_fade_alpha():
+    """
+    Calculate the current fade alpha (0=black, 1=full brightness).
+    Phase 1 (0 to FADE_HALF_MS): 1.0 -> 0.0 (darken old camera)
+    Phase 2 (FADE_HALF_MS to FADE_TOTAL_MS): 0.0 -> 1.0 (brighten new)
+    Returns (alpha, should_switch_now, fade_complete)
+    """
+    elapsed = JSystem.currentTimeMillis() - _fade_state["start_time"]
+
+    if elapsed >= FADE_TOTAL_MS:
+        return 1.0, False, True
+
+    if elapsed < FADE_HALF_MS:
+        alpha = 1.0 - (float(elapsed) / float(FADE_HALF_MS))
+        return max(0.0, min(1.0, alpha)), False, False
+    else:
+        alpha = float(elapsed - FADE_HALF_MS) / float(FADE_HALF_MS)
+        should_switch = not _fade_state["camera_switched"]
+        return max(0.0, min(1.0, alpha)), should_switch, False
+
+
+# ---------------------------------------------------------------------------
+# Hook 1: overlayHelper.render() - darken encoded video frames
+# ---------------------------------------------------------------------------
+
+class _OverlayRenderHook(MethodHook):
+    """
+    Runs AFTER InstantCameraVideoEncoderOverlayHelper.render().
+    At this point the frame is composited in the default framebuffer,
+    ready for eglSwapBuffers. We darken it with a multiply-blend quad.
     """
 
     def __init__(self, plugin):
         self.plugin = plugin
-        self._logged_first = False
+        self._logged_count = 0
 
-    def before_hooked_method(self, param):
+    def after_hooked_method(self, param):
         if not _fade_state["active"]:
             return
 
         try:
-            gl_thread = param.thisObject
+            if not _gl_res["initialized"]:
+                _init_gl_darken(self.plugin)
 
-            # Get InstantCameraView from inner class (this$0)
-            icv = _get_field(gl_thread, "this$0")
-            if icv is None:
-                return
+            alpha, should_switch, complete = _calc_fade_alpha()
 
-            elapsed = JSystem.currentTimeMillis() - _fade_state["start_time"]
-
-            if elapsed >= CROSSFADE_MS:
-                _set_float_field(icv, "cameraTextureAlpha", 1.0)
+            if complete:
                 _fade_state["active"] = False
-                self.plugin.log("[SmoothFade] GL fade complete")
+                self.plugin.log("[SmoothFade] Video fade complete")
                 return
 
-            # Calculate alpha: 0 -> 1 over CROSSFADE_MS
-            alpha = float(elapsed) / float(CROSSFADE_MS)
-            if alpha < 0.0:
-                alpha = 0.0
-            elif alpha > 1.0:
-                alpha = 1.0
+            if should_switch:
+                self._do_switch()
 
-            # Override cameraTextureAlpha BEFORE onDraw reads it
-            _set_float_field(icv, "cameraTextureAlpha", alpha)
+            _apply_darken(alpha)
 
-            if not self._logged_first:
-                self.plugin.log(f"[SmoothFade] GL fade active, alpha={alpha:.2f}")
-                self._logged_first = True
+            if self._logged_count < 5:
+                self.plugin.log(
+                    f"[SmoothFade] Video darken alpha={alpha:.2f}"
+                )
+                self._logged_count += 1
 
-        except Exception:
-            _fade_state["active"] = False
-
-
-# ---------------------------------------------------------------------------
-# Core: camera switch via reinitForNewCamera + slow GL crossfade
-# ---------------------------------------------------------------------------
-
-def _do_camerax_fade(plugin, icv):
-    """
-    Switch CameraX camera with visible fade in the video.
-
-    1. saveLastCameraBitmap + overlay (screen continuity)
-    2. Toggle isFrontface
-    3. reinitForNewCamera() saves old texture, sets alpha=0, creates new
-    4. onDraw hook controls cameraTextureAlpha: 0->1 over 500ms
-    5. GL renderer crossfades old->new texture (encoded in video!)
-    """
-
-    # Lottie icon animation
-    try:
-        drawable = _get_field(icv, "switchCameraDrawable")
-        if drawable is not None:
-            drawable.setCurrentFrame(0)
-            drawable.start()
-    except Exception as e:
-        plugin.log(f"[SmoothFade] Lottie error: {e}")
-
-    # Prevent double-tap
-    _set_bool_field(icv, "flipAnimationInProgress", True)
-
-    # Save last frame as bitmap overlay (screen continuity)
-    overlay = _get_field(icv, "textureOverlayView")
-    try:
-        _call_method(icv, "saveLastCameraBitmap")
-        last_bitmap = _get_field(icv, "lastBitmap")
-        if last_bitmap is not None and overlay is not None:
-            _set_bool_field(icv, "needDrawFlickerStub", False)
-            overlay.setImageBitmap(last_bitmap)
-            overlay.setAlpha(1.0)
-            plugin.log("[SmoothFade] Overlay set")
-    except Exception as e:
-        plugin.log(f"[SmoothFade] Overlay error: {e}")
-
-    # Toggle isFrontface
-    is_front = _get_field(icv, "isFrontface")
-    new_front = not bool(is_front)
-    _set_bool_field(icv, "isFrontface", new_front)
-    plugin.log(f"[SmoothFade] isFrontface: {is_front} -> {new_front}")
-
-    # Update flash
-    try:
-        _call_method(icv, "updateFlash")
-    except Exception:
-        pass
-
-    # Mark camera not ready
-    _set_bool_field(icv, "cameraReady", False)
-    _set_float_field(icv, "cameraZoom", 0.0)
-
-    # Activate GL fade BEFORE calling reinitForNewCamera
-    _fade_state["active"] = True
-    _fade_state["start_time"] = JSystem.currentTimeMillis()
-    plugin.log("[SmoothFade] Fade state activated")
-
-    # reinitForNewCamera(): saves old texture, creates new texture+camera
-    # The onDraw hook controls crossfade speed (500ms instead of ~200ms)
-    camera_thread = _get_field(icv, "cameraThread")
-    if camera_thread is not None:
-        _call_method(camera_thread, "reinitForNewCamera")
-        plugin.log("[SmoothFade] reinitForNewCamera() called")
-    else:
-        plugin.log("[SmoothFade] ERROR: cameraThread null!")
-        _fade_state["active"] = False
-        _set_bool_field(icv, "isFrontface", bool(is_front))
-        _set_bool_field(icv, "flipAnimationInProgress", False)
-        return
-
-    # Cleanup after crossfade
-    def cleanup():
-        try:
-            _fade_state["active"] = False
-            _set_float_field(icv, "cameraTextureAlpha", 1.0)
-            _set_bool_field(icv, "flipAnimationInProgress", False)
-            plugin.log("[SmoothFade] Cleanup done")
         except Exception as e:
-            plugin.log(f"[SmoothFade] Cleanup error: {e}")
+            self.plugin.log(f"[SmoothFade] Render hook error: {e}")
+            self.plugin.log(traceback.format_exc())
+            _fade_state["active"] = False
 
-    run_on_ui_thread(cleanup, CROSSFADE_MS + 200)
+    def _do_switch(self):
+        """Switch the CameraX camera at the fade midpoint."""
+        _fade_state["camera_switched"] = True
+        icv = _fade_state["icv"]
+        if icv is None:
+            return
+
+        try:
+            is_front = _get_field(icv, "isFrontface")
+            new_front = not bool(is_front)
+            _set_bool_field(icv, "isFrontface", new_front)
+            self.plugin.log(f"[SmoothFade] Switch: {is_front} -> {new_front}")
+
+            try:
+                _call_method(icv, "updateFlash")
+            except Exception:
+                pass
+
+            _set_bool_field(icv, "cameraReady", False)
+            _set_float_field(icv, "cameraZoom", 0.0)
+
+            session = _get_field(icv, "cameraXSession")
+            if session is not None:
+                _call_method(session, "switchCamera")
+                self.plugin.log("[SmoothFade] switchCamera() called")
+            else:
+                self.plugin.log("[SmoothFade] ERROR: cameraXSession null!")
+
+        except Exception as e:
+            self.plugin.log(f"[SmoothFade] Switch error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +361,6 @@ class _CameraFadeHook(MethodHook):
             icv = param.thisObject
             self.plugin.log("[SmoothFade] lambda$new$2 fired!")
 
-            # Check CameraX mode
             camera_type = _get_static_field(
                 "com.exteragram.messenger.ExteraConfig", "cameraType"
             )
@@ -286,7 +369,6 @@ class _CameraFadeHook(MethodHook):
             if camera_type is None or int(camera_type) != 2:
                 return
 
-            # Check dual mode
             is_dual = False
             try:
                 dcv_class = JClass.forName(
@@ -305,7 +387,6 @@ class _CameraFadeHook(MethodHook):
             if is_dual:
                 return
 
-            # Check guards
             flip = _get_field(icv, "flipAnimationInProgress")
             if flip:
                 param.setResult(None)
@@ -316,14 +397,84 @@ class _CameraFadeHook(MethodHook):
                 param.setResult(None)
                 return
 
-            self.plugin.log("[SmoothFade] Intercepting!")
+            self.plugin.log("[SmoothFade] Intercepting! Dip-to-black...")
 
-            _do_camerax_fade(self.plugin, icv)
+            _start_fade(self.plugin, icv)
             param.setResult(None)
 
         except Exception as e:
             self.plugin.log(f"[SmoothFade] Hook error: {e}")
             self.plugin.log(traceback.format_exc())
+
+
+def _start_fade(plugin, icv):
+    """
+    Begin the dip-to-black fade transition.
+    The actual camera switch happens at the midpoint (250ms) when
+    the screen is fully black, triggered by _OverlayRenderHook.
+    """
+
+    # Lottie icon animation
+    try:
+        drawable = _get_field(icv, "switchCameraDrawable")
+        if drawable is not None:
+            drawable.setCurrentFrame(0)
+            drawable.start()
+    except Exception as e:
+        plugin.log(f"[SmoothFade] Lottie error: {e}")
+
+    # Prevent double-tap
+    _set_bool_field(icv, "flipAnimationInProgress", True)
+
+    # Activate fade state
+    _fade_state["active"] = True
+    _fade_state["start_time"] = JSystem.currentTimeMillis()
+    _fade_state["camera_switched"] = False
+    _fade_state["icv"] = icv
+    _fade_state["plugin"] = plugin
+    plugin.log("[SmoothFade] Fade activated (dip-to-black)")
+
+    # Animate the preview (sender sees fade via View alpha)
+    try:
+        container = _get_field(icv, "cameraContainer")
+        if container is not None:
+            container.animate().setDuration(FADE_HALF_MS).alpha(0.0).start()
+            plugin.log("[SmoothFade] Preview fade-out started")
+
+            def fade_in():
+                try:
+                    if container is not None:
+                        container.animate().setDuration(
+                            FADE_HALF_MS
+                        ).alpha(1.0).start()
+                    plugin.log("[SmoothFade] Preview fade-in started")
+                except Exception as e:
+                    plugin.log(f"[SmoothFade] Preview fade-in error: {e}")
+
+            run_on_ui_thread(fade_in, FADE_HALF_MS + 50)
+    except Exception as e:
+        plugin.log(f"[SmoothFade] Preview anim error: {e}")
+
+    # Safety cleanup after fade completes
+    def cleanup():
+        try:
+            _fade_state["active"] = False
+            _fade_state["icv"] = None
+            _set_bool_field(icv, "flipAnimationInProgress", False)
+
+            # Ensure preview is fully visible
+            try:
+                c = _get_field(icv, "cameraContainer")
+                if c is not None:
+                    c.setAlpha(1.0)
+            except Exception:
+                pass
+
+            plugin.log("[SmoothFade] Cleanup done")
+        except Exception as e:
+            plugin.log(f"[SmoothFade] Cleanup error: {e}")
+
+    run_on_ui_thread(cleanup, FADE_TOTAL_MS + 300)
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +484,7 @@ class _CameraFadeHook(MethodHook):
 class SmoothCameraFadePlugin(BasePlugin):
 
     def on_plugin_load(self):
-        self.log("[SmoothFade] Loading v4.4.0...")
+        self.log("[SmoothFade] Loading v4.5.0...")
         self._setup_hooks()
         self.log("[SmoothFade] Plugin loaded")
 
@@ -348,69 +499,84 @@ class SmoothCameraFadePlugin(BasePlugin):
 
         try:
             hook1 = _CameraFadeHook(self)
-            u1 = self.hook_all_methods(ICV, "lambda$new$2", hook1, priority=50)
+            u1 = self.hook_all_methods(
+                ICV, "lambda$new$2", hook1, priority=50
+            )
             c1 = len(u1) if u1 else 0
             self.log(f"[SmoothFade] lambda$new$2 hooks: {c1}")
         except Exception as e:
             self.log(f"[SmoothFade] lambda$new$2 hook failed: {e}")
 
-        # Hook 2: onDraw on CameraGLThread (inner class)
-        GLT = find_class(
-            "org.telegram.ui.Components.InstantCameraView$CameraGLThread"
+        # Hook 2: render() on InstantCameraVideoEncoderOverlayHelper
+        OVH = find_class(
+            "org.telegram.ui.Components"
+            ".InstantCameraVideoEncoderOverlayHelper"
         )
-        self.log(f"[SmoothFade] CameraGLThread = {GLT}")
+        self.log(f"[SmoothFade] OverlayHelper = {OVH}")
 
-        if GLT is None:
-            self.log("[SmoothFade] WARNING: CameraGLThread not found!")
-            self.log("[SmoothFade] Trying alternative names...")
-            # Try without $ separator (R8 might flatten)
-            for name in ["CameraGLThread", "onDraw"]:
-                self.log(f"[SmoothFade] (no alternative found for {name})")
-            return
+        if OVH is None:
+            self.log("[SmoothFade] WARNING: OverlayHelper not found!")
+            for pkg in [
+                "org.telegram.p029ui.Components",
+                "org.telegram.p026ui.Components",
+            ]:
+                alt = find_class(
+                    f"{pkg}.InstantCameraVideoEncoderOverlayHelper"
+                )
+                if alt is not None:
+                    OVH = alt
+                    self.log(f"[SmoothFade] Found at {pkg}")
+                    break
 
-        try:
-            hook2 = _OnDrawHook(self)
-            u2 = self.hook_all_methods(GLT, "onDraw", hook2, priority=50)
-            c2 = len(u2) if u2 else 0
-            self.log(f"[SmoothFade] onDraw hooks: {c2}")
+        if OVH is not None:
+            try:
+                hook2 = _OverlayRenderHook(self)
+                u2 = self.hook_all_methods(
+                    OVH, "render", hook2, priority=50
+                )
+                c2 = len(u2) if u2 else 0
+                self.log(f"[SmoothFade] render hooks: {c2}")
 
-            if c2 == 0:
-                self.log("[SmoothFade] WARNING: 0 onDraw hooked!")
-                # Diagnostic: list draw/render methods
-                try:
-                    real_cls = JClass.forName(
-                        "org.telegram.ui.Components"
-                        ".InstantCameraView$CameraGLThread"
-                    )
-                    methods = real_cls.getDeclaredMethods()
-                    names = set()
-                    for m_obj in methods:
-                        names.add(str(m_obj.getName()))
-                    draw_names = sorted(
-                        n for n in names
-                        if "draw" in n.lower() or "render" in n.lower()
-                    )
-                    self.log(f"[SmoothFade] GLT draw methods: {draw_names}")
-                    self.log(f"[SmoothFade] GLT all methods: {sorted(names)}")
-                except Exception as e2:
-                    self.log(f"[SmoothFade] Method listing error: {e2}")
-        except Exception as e:
-            self.log(f"[SmoothFade] onDraw hook failed: {e}")
-            self.log(traceback.format_exc())
+                if c2 == 0:
+                    self.log("[SmoothFade] WARNING: 0 render hooks!")
+                    try:
+                        real_cls = JClass.forName(
+                            "org.telegram.ui.Components"
+                            ".InstantCameraVideoEncoderOverlayHelper"
+                        )
+                        methods = real_cls.getDeclaredMethods()
+                        names = sorted(set(
+                            str(m.getName()) for m in methods
+                        ))
+                        self.log(f"[SmoothFade] OVH methods: {names}")
+                    except Exception as e2:
+                        self.log(
+                            f"[SmoothFade] Method listing error: {e2}"
+                        )
+            except Exception as e:
+                self.log(f"[SmoothFade] render hook failed: {e}")
+                self.log(traceback.format_exc())
+        else:
+            self.log(
+                "[SmoothFade] ERROR: OverlayHelper not found anywhere!"
+            )
 
     def on_plugin_unload(self):
         _fade_state["active"] = False
+        _fade_state["icv"] = None
         self.log("[SmoothFade] Plugin unloaded")
 
     def create_settings(self) -> List[Any]:
         return [
-            Header(text="Smooth Camera Fade v4.4"),
+            Header(text="Smooth Camera Fade v4.5"),
             Text(
-                text="Smooth camera switch with fade animation in "
-                     "round videos (CameraX mode).\n\n"
-                     "Hooks into GL rendering to control crossfade "
-                     "speed, making it visible in the encoded video "
-                     "(recipient sees the fade too).\n\n"
+                text="Smooth camera switch with dip-to-black animation "
+                     "in round videos (CameraX mode).\n\n"
+                     "Hooks the video encoder overlay renderer to "
+                     "darken frames during the transition, making the "
+                     "fade visible to the recipient.\n\n"
+                     "Phase 1: old camera fades to black (250ms)\n"
+                     "Phase 2: new camera fades from black (250ms)\n\n"
                      "Check logs: adb logcat | grep SmoothFade"
             ),
         ]
