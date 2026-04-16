@@ -1,24 +1,26 @@
 """
-Smooth Camera Fade Plugin v4.9 for exteraGram
+Smooth Camera Fade Plugin v4.10 for exteraGram
 
 Replaces the abrupt camera switch in round videos (CameraX non-dual
 mode) with a smooth "dip to black" transition, similar to iPhone.
 
-v4.9 improvements over v4.8:
-  - Cosine ease-in-out curves instead of linear interpolation
-  - Double-pass GL darken for deeper blacks (alpha^2 effective)
-  - Black hold period at midpoint (~60ms) hides camera switch and
-    progress ring completely
-  - Properly saves/restores GL blend state to avoid artifacts
-  - Synced preview animation with AccelerateDecelerateInterpolator
+v4.10 improvements over v4.9:
+  - Camera switch moved to 50% of fade-out phase (was at hold period).
+    This gives camera ~435ms to initialize instead of ~250ms,
+    eliminating the micro-freeze when new camera isn't ready.
+  - 100ms grace period after fade-in completes keeps darken active
+    at alpha=1.0 (no visual effect) to prevent flash frame of
+    old camera content at the transition boundary.
 
 Architecture:
   1. Hook lambda$new$2 -> intercept camera switch, delay actual switch
   2. Hook InstantCameraVideoEncoderOverlayHelper.render() -> darken
      each encoded video frame using GL multiply blend
   3. Phase 1 (fade-out): old camera darkens to black (ease-in curve)
-  4. Hold at black for ~60ms while camera switches
+     Camera switch happens at 50% of fade-out (while already dark)
+  4. Hold at black for ~60ms (camera initializing)
   5. Phase 2 (fade-in): new camera brightens from black (ease-out curve)
+  6. Grace period: 100ms of alpha=1.0 (invisible safety buffer)
 
 The darken effect uses a GL shader that draws a full-screen quad
 multiplied by fadeAlpha, applied AFTER the normal frame + overlay
@@ -32,7 +34,7 @@ __description__ = (
     "visible to both sender and recipient"
 )
 __author__ = "Devin"
-__version__ = "4.9.0"
+__version__ = "4.10.0"
 __icon__ = "exteraPlugins/1"
 __min_version__ = "11.12.0"
 
@@ -51,8 +53,15 @@ _DEFAULT_FADE_MS = 500  # total fade duration in ms
 _MIN_FADE_MS = 100
 _MAX_FADE_MS = 5000
 
-# Black hold period at midpoint (ms) - camera switches here
+# Black hold period at midpoint (ms)
 _HOLD_MS = 60
+
+# Camera switch point: fraction of fade-out phase where switch fires
+_SWITCH_POINT = 0.5
+
+# Grace period after fade completes (ms) - keeps darken active at
+# alpha=1.0 (invisible) to prevent flash frame from stale buffers
+_GRACE_MS = 100
 
 # Current fade half-duration (updated from settings)
 _fade_half_ms = _DEFAULT_FADE_MS // 2
@@ -317,33 +326,42 @@ def _calc_fade_alpha():
     Calculate the current fade alpha (0=black, 1=full brightness)
     using cosine easing curves and a black hold period.
 
-    Timeline (for default 500ms, hold=60ms):
-      Phase 1 (0 to 220ms): ease-in 1.0 -> 0.0 (old camera darkens)
-      Hold    (220 to 280ms): alpha stays 0.0 (fully black)
-      Phase 2 (280 to 500ms): ease-out 0.0 -> 1.0 (new brightens)
-
-    The camera switch happens at the start of the hold period.
+    Timeline (for default 500ms, hold=60ms, grace=100ms):
+      Phase 1 (0 to 250ms): ease-in 1.0 -> 0.0 (old camera darkens)
+        -> Camera switch fires at 50% (~125ms) while already dark
+      Hold    (250 to 310ms): alpha stays 0.0 (camera initializing)
+      Phase 2 (310 to 560ms): ease-out 0.0 -> 1.0 (new brightens)
+      Grace   (560 to 660ms): alpha=1.0, no visual change (safety)
 
     Returns (alpha, should_switch_now, fade_complete)
     """
     half = _fade_half_ms
     hold = _HOLD_MS
+    grace = _GRACE_MS
     total = half * 2 + hold
     elapsed = JSystem.currentTimeMillis() - _fade_state["start_time"]
 
+    # Grace period: keep active at alpha=1.0 (no visual effect)
+    # to prevent flash frame from stale camera buffers
     if elapsed >= total:
+        if elapsed < total + grace:
+            return 1.0, False, False
         return 1.0, False, True
 
     # Phase 1: fade out (ease-in: slow start, fast end -> black)
     if elapsed < half:
         t = float(elapsed) / float(half)
         alpha = 1.0 - _ease_in(t)
-        return max(0.0, min(1.0, alpha)), False, False
+        # Switch camera at SWITCH_POINT of fade-out while dark
+        should_switch = (
+            t >= _SWITCH_POINT
+            and not _fade_state["camera_switched"]
+        )
+        return max(0.0, min(1.0, alpha)), should_switch, False
 
-    # Hold at black
+    # Hold at black (camera is initializing)
     if elapsed < half + hold:
-        should_switch = not _fade_state["camera_switched"]
-        return 0.0, should_switch, False
+        return 0.0, False, False
 
     # Phase 2: fade in (ease-out: fast start, slow end -> full)
     t = float(elapsed - half - hold) / float(half)
@@ -613,7 +631,7 @@ def _start_fade(plugin, icv):
         except Exception as e:
             plugin.log(f"[SmoothFade] Cleanup error: {e}")
 
-    run_on_ui_thread(cleanup, total + 300)
+    run_on_ui_thread(cleanup, total + _GRACE_MS + 200)
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +641,7 @@ def _start_fade(plugin, icv):
 class SmoothCameraFadePlugin(BasePlugin):
 
     def on_plugin_load(self):
-        self.log("[SmoothFade] Loading v4.9.0...")
+        self.log("[SmoothFade] Loading v4.10.0...")
         self._load_duration_setting()
         self._setup_hooks()
         self.log("[SmoothFade] Plugin loaded")
@@ -738,7 +756,7 @@ class SmoothCameraFadePlugin(BasePlugin):
 
     def create_settings(self) -> List[Any]:
         return [
-            Header(text="Smooth Camera Fade v4.9"),
+            Header(text="Smooth Camera Fade v4.10"),
             Input(
                 key="fade_duration_ms",
                 text="Fade duration (ms)",
