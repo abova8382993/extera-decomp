@@ -1,0 +1,147 @@
+# Stereo Voice plugin for exteraGram.
+#
+# Forces mono audio sources (voice messages and most round video messages)
+# to be up-mixed to two-channel output inside ExoPlayer's audio pipeline.
+# This is the same channel duplication that happens naturally in hardware
+# when a mono AudioTrack is played on stereo speakers, but doing it one
+# layer higher guarantees the left and right channels always receive the
+# same signal, which matters on some Bluetooth headsets and on devices
+# that otherwise route mono AudioTrack output to a single earpiece only.
+#
+# Approach:
+#   exteraGram plays voice/round messages through
+#       org.telegram.ui.Components.VideoPlayer
+#         -> com.google.android.exoplayer2.ExoPlayer
+#         -> com.google.android.exoplayer2.audio.DefaultAudioSink
+#   DefaultAudioSink.configure(Format, int, int[]) receives an optional
+#   channel-map `int[]`. When non-null (and the input is raw PCM), the
+#   sink's built-in ChannelMappingAudioProcessor duplicates input channels
+#   according to that map and the downstream AudioTrack is created with
+#   exactly `map.length` output channels.
+#
+#   We intercept that call with an Xposed hook: if the input is raw PCM
+#   and the input channel count is 1, we replace the (usually null)
+#   channel-map argument with `new int[]{0, 0}`. Everything else in the
+#   sink's configure logic keeps working and the AudioTrack is built with
+#   CHANNEL_OUT_STEREO instead of CHANNEL_OUT_MONO.
+#
+# VoIP and group calls are NOT affected: they use WebRTC's own audio
+# stack (org.webrtc.voiceengine.*), not ExoPlayer.
+
+from base_plugin import BasePlugin, MethodHook
+from hook_utils import find_class
+from ui.settings import Header, Switch, Text
+
+from java import jarray, jint
+
+__id__ = "stereo_voice"
+__name__ = "Stereo Voice & Round"
+__description__ = (
+    "Воспроизводит голосовые сообщения и круглые видео в стерео: "
+    "дублирует моно-канал в оба стерео-канала ещё до AudioTrack."
+)
+__author__ = "@abova8382993"
+__version__ = "1.0.0"
+__icon__ = "exteraPlugins/1"
+__app_version__ = ">=12.5.1"
+__sdk_version__ = ">=1.4.3.6"
+
+
+AUDIO_SINK_CLASS = "com.google.android.exoplayer2.audio.DefaultAudioSink"
+FORMAT_CLASS = "com.google.android.exoplayer2.Format"
+RAW_AUDIO_MIME = "audio/raw"
+
+
+class DefaultAudioSinkConfigureHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        try:
+            if not self.plugin.get_setting("enabled", True):
+                return
+
+            fmt = param.args[0]
+            if fmt is None:
+                return
+
+            # Only the raw-PCM branch in DefaultAudioSink.configure() reads
+            # the channel-map argument. Non-PCM formats ignore it.
+            mime = getattr(fmt, "sampleMimeType", None)
+            if mime != RAW_AUDIO_MIME:
+                return
+
+            channel_count = getattr(fmt, "channelCount", 0)
+            if channel_count != 1:
+                return
+
+            existing_map = param.args[2]
+            if existing_map is not None:
+                # Something upstream already customised the channel map
+                # (e.g. multichannel downmix). Do not override.
+                return
+
+            param.args[2] = jarray(jint)([0, 0])
+        except Exception as exc:
+            self.plugin.log("stereo_voice hook failed: %s" % exc)
+
+
+class StereoVoicePlugin(BasePlugin):
+    def on_plugin_load(self):
+        self._unhooks = []
+
+        audio_sink_cls = find_class(AUDIO_SINK_CLASS)
+        if audio_sink_cls is None:
+            self.log("DefaultAudioSink class not found; plugin is inert")
+            return
+
+        # Using hook_all_methods avoids having to resolve the int[] Class
+        # literal ourselves. There is only one `configure` overload on
+        # DefaultAudioSink in the bundled ExoPlayer build.
+        unhooks = self.hook_all_methods(
+            audio_sink_cls,
+            "configure",
+            DefaultAudioSinkConfigureHook(self),
+        )
+
+        if not unhooks:
+            self.log("Failed to hook DefaultAudioSink.configure")
+            return
+
+        self._unhooks = list(unhooks)
+        self.log(
+            "Hooked DefaultAudioSink.configure (%d overload(s))" % len(self._unhooks)
+        )
+
+    def on_plugin_unload(self):
+        for unhook in getattr(self, "_unhooks", []) or []:
+            try:
+                self.unhook_method(unhook)
+            except Exception as exc:
+                self.log("unhook failed: %s" % exc)
+        self._unhooks = []
+
+    def create_settings(self):
+        return [
+            Header(text="Stereo Voice & Round"),
+            Switch(
+                key="enabled",
+                text="Стерео вместо моно",
+                subtext=(
+                    "Дублирует моно-канал в оба стерео-канала при "
+                    "воспроизведении голосовых и круглых видео."
+                ),
+                default=True,
+                icon="msg_voice",
+            ),
+            Text(
+                text="Что меняется",
+                subtext=(
+                    "Хук на DefaultAudioSink.configure: при моно-источнике "
+                    "(audio/raw, channelCount == 1) подменяется channel-map "
+                    "на [0, 0], и AudioTrack создаётся как CHANNEL_OUT_STEREO. "
+                    "Голосовые звонки (VoIP) не затрагиваются."
+                ),
+                icon="msg_info",
+            ),
+        ]
