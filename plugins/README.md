@@ -1,69 +1,97 @@
-# exteraGram plugins
+# Stereo Round Videos plugin
 
-Плагины для exteraGram, использующие декомпилированный код из `sources/`
-в качестве справки.
+Плагин для exteraGram, который заставляет **круглые видео** (кружки)
+писать звук в стерео вместо моно. Голосовые сообщения не затрагиваются
+(см. ниже почему).
 
-## `stereo_voice.plugin`
+Файл: [`stereo_round.plugin`](./stereo_round.plugin).
 
-**Что делает.** Заставляет exteraGram воспроизводить голосовые сообщения
-и круглые видео (кружки) в стерео вместо моно — дублирует единственный
-моно-канал в оба стерео-канала ещё на уровне ExoPlayer, до создания
-`AudioTrack`.
+## Что делает плагин
 
-**Зачем.** Голосовые сообщения и часть кружков кодируются как mono PCM.
-На стерео-колонках Android обычно делает микс автоматически, но
-часть Bluetooth-наушников и некоторые аудио-маршруты в системе
-пускают моно-сигнал только в один канал. Плагин форсирует стерео-выход
-на уровне `DefaultAudioSink`, что гарантирует одинаковый сигнал в
-обоих каналах.
+По умолчанию `org.telegram.ui.Components.InstantCameraView$VideoRecorder.prepareEncoder`
+инициализирует запись звука так:
 
-### Как это работает (технически)
+```java
+int minBufferSize = AudioRecord.getMinBufferSize(48000, CHANNEL_IN_MONO, PCM_16BIT); // 1
+int bufferSize = 49152 < minBufferSize ? ((minBufferSize / 2048) + 1) * 4096 : 49152;
+...
+AudioRecord recorder = new AudioRecord(DEFAULT, 48000, CHANNEL_IN_MONO, PCM_16BIT, bufferSize); // 2
+...
+MediaFormat fmt = new MediaFormat();
+fmt.setString("mime", "audio/mp4a-latm");
+fmt.setInteger("sample-rate", 48000);
+fmt.setInteger("channel-count", 1); // 3
+```
 
-1. В exteraGram голосовые/кружки воспроизводятся через
-   `org.telegram.ui.Components.VideoPlayer`, который построен на
-   ExoPlayer.
-2. ExoPlayer отдаёт декодированный PCM в
-   `com.google.android.exoplayer2.audio.DefaultAudioSink`, вызывая
-   `configure(Format format, int specifiedBufferSize, int[] outputChannels)`.
-3. Встроенный `ChannelMappingAudioProcessor` внутри `DefaultAudioSink`
-   умеет по карте каналов дублировать вход в несколько выходов —
-   но стандартно он получает `null` (карты нет) и ничего не делает.
-4. Плагин вешается Xposed-хуком на `DefaultAudioSink.configure`.
-   Если формат `audio/raw` и `channelCount == 1`, третий аргумент
-   (`int[]`) подменяется на `new int[]{0, 0}`. Тогда
-   `ChannelMappingAudioProcessor` выдаёт 2-канальный PCM, а
-   `AudioTrack` создаётся как `CHANNEL_OUT_STEREO`.
+Точки `1`, `2`, `3` находятся в
+[`InstantCameraView.java:3653, 3684, 3699`](../sources/org/telegram/p026ui/Components/InstantCameraView.java).
 
-Код хука: [`stereo_voice.plugin`](./stereo_voice.plugin).
-Ключевые места в декомпе:
+Плагин подменяет три значения через Xposed-хуки:
 
-- Путь воспроизведения голосовых / кружков — `MediaController.audioPlayer`
-  типа `VideoPlayer`: `sources/org/telegram/messenger/MediaController.java`.
-- Обёртка над ExoPlayer — `sources/org/telegram/p026ui/Components/VideoPlayer.java`.
-- Сам sink и `ChannelMappingAudioProcessor` —
-  `sources/com/google/android/exoplayer2/audio/DefaultAudioSink.java`
-  и `sources/com/google/android/exoplayer2/audio/ChannelMappingAudioProcessor.java`.
+| Хук                                     | Было           | Стало              |
+| --------------------------------------- | -------------- | ------------------ |
+| `AudioRecord.getMinBufferSize`          | `CHANNEL_IN_MONO (16)` | `CHANNEL_IN_STEREO (12)` |
+| `new AudioRecord(..., ch, ...)`         | `CHANNEL_IN_MONO (16)` | `CHANNEL_IN_STEREO (12)` |
+| `MediaFormat.setInteger("channel-count")` | `1`            | `2`                |
 
-### Что не затрагивается
+Каждый хук срабатывает **только когда стек вызова содержит
+`InstantCameraView`** — чтобы не задеть другие места в Android/клиенте,
+где тоже создаются `AudioRecord` / `MediaFormat` (VoIP, уведомления,
+плееры и т.д.).
 
-- Голосовые и видеозвонки (VoIP): идут через WebRTC
-  (`org.webrtc.voiceengine.*`), минуя ExoPlayer.
-- Стерео-источники (музыка, обычные видео со стерео-дорожкой):
-  хук срабатывает только при `channelCount == 1`.
-- Не-PCM форматы (offload / passthrough): хук работает только в ветке
-  `audio/raw`, где `channel-map` реально используется.
+## Почему голосовые остаются моно
 
-### Установка
+Голосовые сообщения пишутся через `MediaController` и кодируются
+**нативным** Opus-энкодером:
 
-1. Собрать / открыть exteraGram версии `12.5.1+` с включённым плагин-движком.
-2. `exteraGram Preferences` → `Plugins` → включить плагин-движок.
-3. Положить `stereo_voice.plugin` в папку плагинов exteraGram и включить
-   его в списке.
-4. В настройках плагина убедиться, что `Стерео вместо моно` включено.
+- [`MediaController.java:347-352`](../sources/org/telegram/messenger/MediaController.java)
+  — `startRecord(String path, int sampleRate)` и `writeFrame(ByteBuffer, int)`
+  объявлены как `native`.
+- Тело этих функций живёт в нативной библиотеке (`TMessagesProj/jni/audio.c`
+  в upstream Telegram, которую форкает exteraGram). В ней количество
+  каналов энкодера зашито в исходниках:
 
-### Ограничения
+  ```c
+  inopt.channels = 1;
+  header.channels = 1;
+  _encoder = opus_encoder_create(coding_rate, 1, OPUS_APPLICATION_VOIP, &result);
+  ```
 
-- Требует SDK плагинов `>=1.4.3.6` и exteraGram `>=12.5.1`.
-- Если в какой-то будущей версии ExoPlayer сигнатура
-  `DefaultAudioSink.configure` изменится, хук перестанет срабатывать —
-  плагин просто ничего не сделает, поломки воспроизведения быть не должно.
+Плагин не может изменить нативный код. Чтобы получить стерео-голосовые,
+нужно патчить `audio.c` и пересобирать `.so` — это уже не плагин, а
+модификация форка приложения.
+
+Плюс сам протокол Telegram для voice-сообщений
+(`TL_documentAttributeAudio.voice = true`) исторически подразумевает
+одноканальное OGG Opus, так что даже при патче нативки стерео-голосовые
+могут отображаться странно в других клиентах.
+
+## Оговорки про реальный звук
+
+- `MediaCodec` AAC-энкодер принимает `channel-count = 2` на всех
+  современных Android-устройствах, поэтому само кодирование не
+  упадёт.
+- Получится ли **настоящее** стерео, зависит от телефона:
+  - У аппаратов с mic-array (Pixel, многие Samsung флагманы) стерео
+    будет реальным.
+  - У аппаратов с одним основным микрофоном Android обычно дублирует
+    сигнал в оба канала — выйдет «центрированное стерео» (по сути
+    моно, но в стерео-контейнере).
+
+## Настройки плагина
+
+В настройках плагина есть переключатель **«Писать кружки в стерео»**.
+Если записанные кружки звучат странно — выключите его, и запись сразу
+вернётся к стандартному моно-поведению без перезапуска приложения.
+
+## Требования
+
+- exteraGram `>= 12.5.1`
+- Plugin SDK `>= 1.4.3.3`
+
+## История
+
+Изначальная версия PR пыталась решить задачу со стороны воспроизведения
+(`DefaultAudioSink` → `AudioTrack` c дублированием моно-канала). Это
+было недоразумением: задача — стерео-**запись**. Текущая реализация
+работает строго на стороне записи, только для `InstantCameraView`.

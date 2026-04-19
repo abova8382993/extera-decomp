@@ -1,0 +1,239 @@
+# Stereo Round Videos plugin for exteraGram.
+#
+# Records *round video messages* (кружки) with a two-channel audio track
+# instead of the default mono one. Voice messages are NOT affected: they
+# go through a native Opus encoder that is hardcoded to 1 channel inside
+# TMessagesProj/jni/audio.c, which a Python plugin cannot override.
+#
+# What the app does by default
+# ----------------------------
+# `org.telegram.ui.Components.InstantCameraView$VideoRecorder.prepareEncoder`
+# sets up recording as:
+#
+#     int minBufferSize = AudioRecord.getMinBufferSize(48000, CHANNEL_IN_MONO, PCM_16BIT);
+#     ...
+#     new AudioRecord(DEFAULT, 48000, CHANNEL_IN_MONO, PCM_16BIT, bufferSize);
+#     MediaFormat fmt = new MediaFormat();
+#     fmt.setString("mime", "audio/mp4a-latm");
+#     fmt.setInteger("sample-rate", 48000);
+#     fmt.setInteger("channel-count", 1);
+#     ...
+#
+# What this plugin changes
+# ------------------------
+# * AudioRecord.getMinBufferSize(..., CHANNEL_IN_MONO, ...)
+#       -> getMinBufferSize(..., CHANNEL_IN_STEREO, ...)
+# * new AudioRecord(..., CHANNEL_IN_MONO, ...)
+#       -> new AudioRecord(..., CHANNEL_IN_STEREO, ...)
+# * MediaFormat.setInteger("channel-count", 1)
+#       -> setInteger("channel-count", 2)
+#
+# All three hooks are gated on the current call stack containing
+# `InstantCameraView`, so unrelated Android code that also touches
+# `AudioRecord` or `MediaFormat` (notifications, VoIP, screen recorder,
+# other apps, ...) is left alone.
+#
+# Caveats
+# -------
+# * The MediaCodec AAC encoder accepts channel-count=2 on every modern
+#   Android device, so encoding itself will not fail. The container
+#   (MP4/MOV muxer) stores stereo AAC without additional changes.
+# * Whether you actually get a true stereo microphone capture depends on
+#   the device: many phones have only one primary mic and Android will
+#   simply duplicate the mono signal into both channels (effective
+#   behaviour = "centered stereo"). Phones with mic arrays (Pixel, many
+#   Samsung flagships, etc.) will capture real stereo.
+# * Voice messages are still mono — see header comment for why.
+
+from base_plugin import BasePlugin, MethodHook
+from hook_utils import find_class
+from ui.settings import Header, Switch, Text
+
+from java.lang import Thread as JThread
+
+__id__ = "stereo_round"
+__name__ = "Stereo Round Videos"
+__description__ = (
+    "Записывает круглые видео (кружки) со стерео-звуком вместо моно. "
+    "На голосовые сообщения не влияет — там нативный энкодер Opus."
+)
+__author__ = "@abova8382993"
+__version__ = "1.0.0"
+__icon__ = "exteraPlugins/1"
+__app_version__ = ">=12.5.1"
+__sdk_version__ = ">=1.4.3.3"
+
+
+CHANNEL_IN_MONO = 16
+CHANNEL_IN_STEREO = 12
+
+INSTANT_CAMERA_MARKER = "InstantCameraView"
+
+
+def _caller_is_instant_camera():
+    """Walk the current Java stack and look for InstantCameraView frames.
+
+    Called only during recording setup (a handful of times per recording),
+    so the O(stack depth) cost is fine.
+    """
+    try:
+        for frame in JThread.currentThread().getStackTrace():
+            name = frame.getClassName()
+            if name and INSTANT_CAMERA_MARKER in name:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+class _StereoRoundHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def _enabled(self):
+        return self.plugin.get_setting("enabled", True)
+
+
+class GetMinBufferSizeHook(_StereoRoundHook):
+    """Replace `getMinBufferSize(sampleRate, CHANNEL_IN_MONO, encoding)`
+    with `getMinBufferSize(sampleRate, CHANNEL_IN_STEREO, encoding)` when
+    called from InstantCameraView.
+    """
+
+    def before_hooked_method(self, param):
+        try:
+            if not self._enabled():
+                return
+            if len(param.args) < 3:
+                return
+            if param.args[1] != CHANNEL_IN_MONO:
+                return
+            if not _caller_is_instant_camera():
+                return
+            param.args[1] = CHANNEL_IN_STEREO
+        except Exception as exc:
+            self.plugin.log("getMinBufferSize hook failed: %s" % exc)
+
+
+class AudioRecordCtorHook(_StereoRoundHook):
+    """Replace channel config in the 5-arg AudioRecord constructor when
+    called from InstantCameraView.
+
+    Signature: AudioRecord(int audioSource, int sampleRateInHz,
+                           int channelConfig, int audioFormat, int bufferSizeInBytes)
+    """
+
+    def before_hooked_method(self, param):
+        try:
+            if not self._enabled():
+                return
+            args = param.args
+            if len(args) != 5:
+                return
+            if args[2] != CHANNEL_IN_MONO:
+                return
+            if not _caller_is_instant_camera():
+                return
+            args[2] = CHANNEL_IN_STEREO
+            # bufferSizeInBytes (args[4]) was precomputed from the hooked
+            # getMinBufferSize call above, so it already reflects the
+            # stereo frame size. No additional adjustment needed.
+        except Exception as exc:
+            self.plugin.log("AudioRecord ctor hook failed: %s" % exc)
+
+
+class MediaFormatSetIntegerHook(_StereoRoundHook):
+    """Bump MediaFormat `channel-count` from 1 to 2 when set from
+    InstantCameraView.
+    """
+
+    def before_hooked_method(self, param):
+        try:
+            if not self._enabled():
+                return
+            if len(param.args) != 2:
+                return
+            key = param.args[0]
+            if key != "channel-count":
+                return
+            if param.args[1] != 1:
+                return
+            if not _caller_is_instant_camera():
+                return
+            param.args[1] = 2
+        except Exception as exc:
+            self.plugin.log("MediaFormat.setInteger hook failed: %s" % exc)
+
+
+class StereoRoundPlugin(BasePlugin):
+    def on_plugin_load(self):
+        self._unhooks = []
+
+        audio_record_cls = find_class("android.media.AudioRecord")
+        media_format_cls = find_class("android.media.MediaFormat")
+
+        if audio_record_cls is None or media_format_cls is None:
+            self.log("android.media.AudioRecord / MediaFormat not found")
+            return
+
+        # getMinBufferSize (static) — there is only one overload.
+        unhooks = self.hook_all_methods(
+            audio_record_cls,
+            "getMinBufferSize",
+            GetMinBufferSizeHook(self),
+        )
+        if unhooks:
+            self._unhooks.extend(unhooks)
+
+        # AudioRecord has several constructors; our hook filters on 5-arg
+        # so the others are harmless no-ops.
+        unhooks = self.hook_all_constructors(
+            audio_record_cls,
+            AudioRecordCtorHook(self),
+        )
+        if unhooks:
+            self._unhooks.extend(unhooks)
+
+        # MediaFormat.setInteger(String, int) — one overload.
+        unhooks = self.hook_all_methods(
+            media_format_cls,
+            "setInteger",
+            MediaFormatSetIntegerHook(self),
+        )
+        if unhooks:
+            self._unhooks.extend(unhooks)
+
+        self.log("Stereo Round Videos: installed %d hook(s)" % len(self._unhooks))
+
+    def on_plugin_unload(self):
+        for unhook in getattr(self, "_unhooks", []) or []:
+            try:
+                self.unhook_method(unhook)
+            except Exception as exc:
+                self.log("unhook failed: %s" % exc)
+        self._unhooks = []
+
+    def create_settings(self):
+        return [
+            Header(text="Stereo Round Videos"),
+            Switch(
+                key="enabled",
+                text="Писать кружки в стерео",
+                subtext=(
+                    "AudioRecord переключается на CHANNEL_IN_STEREO, "
+                    "MediaCodec AAC кодирует с channel-count = 2."
+                ),
+                default=True,
+                icon="msg_videocam",
+            ),
+            Text(
+                text="Про голосовые сообщения",
+                subtext=(
+                    "Голосовые сообщения по-прежнему моно: их кодирует "
+                    "нативный Opus-энкодер (TMessagesProj/jni/audio.c), "
+                    "в котором количество каналов зашито в исходниках. "
+                    "Плагин не может этого изменить — нужна пересборка .so."
+                ),
+                icon="msg_info",
+            ),
+        ]
