@@ -1,26 +1,24 @@
 """
-Smooth Camera Fade Plugin v4.10 for exteraGram
+Smooth Camera Fade Plugin v4.11 for exteraGram
 
 Replaces the abrupt camera switch in round videos (CameraX non-dual
 mode) with a smooth "dip to black" transition, similar to iPhone.
 
-v4.10 improvements over v4.9:
-  - Camera switch moved to 50% of fade-out phase (was at hold period).
-    This gives camera ~435ms to initialize instead of ~250ms,
-    eliminating the micro-freeze when new camera isn't ready.
-  - 100ms grace period after fade-in completes keeps darken active
-    at alpha=1.0 (no visual effect) to prevent flash frame of
-    old camera content at the transition boundary.
+v4.11 improvements over v4.10:
+  - Camera switch fires IMMEDIATELY at the start of the animation
+    (was at 50% of fade-out). This gives the camera the maximum
+    possible time to initialize (~560ms for default 500ms setting),
+    completely eliminating micro-freeze.
 
 Architecture:
-  1. Hook lambda$new$2 -> intercept camera switch, delay actual switch
-  2. Hook InstantCameraVideoEncoderOverlayHelper.render() -> darken
+  1. Hook lambda$new$2 -> intercept camera switch button press
+  2. switchCamera() fires immediately, fade-out begins simultaneously
+  3. Hook InstantCameraVideoEncoderOverlayHelper.render() -> darken
      each encoded video frame using GL multiply blend
-  3. Phase 1 (fade-out): old camera darkens to black (ease-in curve)
-     Camera switch happens at 50% of fade-out (while already dark)
-  4. Hold at black for ~60ms (camera initializing)
-  5. Phase 2 (fade-in): new camera brightens from black (ease-out curve)
-  6. Grace period: 100ms of alpha=1.0 (invisible safety buffer)
+  4. Phase 1 (fade-out): old camera darkens to black (ease-in curve)
+  5. Hold at black for ~60ms (camera initializing)
+  6. Phase 2 (fade-in): new camera brightens from black (ease-out curve)
+  7. Grace period: 100ms of alpha=1.0 (invisible safety buffer)
 
 The darken effect uses a GL shader that draws a full-screen quad
 multiplied by fadeAlpha, applied AFTER the normal frame + overlay
@@ -34,7 +32,7 @@ __description__ = (
     "visible to both sender and recipient"
 )
 __author__ = "Devin"
-__version__ = "4.10.0"
+__version__ = "4.11.0"
 __icon__ = "exteraPlugins/1"
 __min_version__ = "11.12.0"
 
@@ -55,9 +53,6 @@ _MAX_FADE_MS = 5000
 
 # Black hold period at midpoint (ms)
 _HOLD_MS = 60
-
-# Camera switch point: fraction of fade-out phase where switch fires
-_SWITCH_POINT = 0.5
 
 # Grace period after fade completes (ms) - keeps darken active at
 # alpha=1.0 (invisible) to prevent flash frame from stale buffers
@@ -326,14 +321,16 @@ def _calc_fade_alpha():
     Calculate the current fade alpha (0=black, 1=full brightness)
     using cosine easing curves and a black hold period.
 
+    Camera switch fires immediately at animation start (in _start_fade),
+    NOT during the fade phases. This gives maximum init time.
+
     Timeline (for default 500ms, hold=60ms, grace=100ms):
-      Phase 1 (0 to 250ms): ease-in 1.0 -> 0.0 (old camera darkens)
-        -> Camera switch fires at 50% (~125ms) while already dark
+      Phase 1 (0 to 250ms): ease-in 1.0 -> 0.0 (darkens to black)
       Hold    (250 to 310ms): alpha stays 0.0 (camera initializing)
-      Phase 2 (310 to 560ms): ease-out 0.0 -> 1.0 (new brightens)
+      Phase 2 (310 to 560ms): ease-out 0.0 -> 1.0 (brightens)
       Grace   (560 to 660ms): alpha=1.0, no visual change (safety)
 
-    Returns (alpha, should_switch_now, fade_complete)
+    Returns (alpha, fade_complete)
     """
     half = _fade_half_ms
     hold = _HOLD_MS
@@ -345,28 +342,23 @@ def _calc_fade_alpha():
     # to prevent flash frame from stale camera buffers
     if elapsed >= total:
         if elapsed < total + grace:
-            return 1.0, False, False
-        return 1.0, False, True
+            return 1.0, False
+        return 1.0, True
 
     # Phase 1: fade out (ease-in: slow start, fast end -> black)
     if elapsed < half:
         t = float(elapsed) / float(half)
         alpha = 1.0 - _ease_in(t)
-        # Switch camera at SWITCH_POINT of fade-out while dark
-        should_switch = (
-            t >= _SWITCH_POINT
-            and not _fade_state["camera_switched"]
-        )
-        return max(0.0, min(1.0, alpha)), should_switch, False
+        return max(0.0, min(1.0, alpha)), False
 
     # Hold at black (camera is initializing)
     if elapsed < half + hold:
-        return 0.0, False, False
+        return 0.0, False
 
     # Phase 2: fade in (ease-out: fast start, slow end -> full)
     t = float(elapsed - half - hold) / float(half)
     alpha = _ease_out(t)
-    return max(0.0, min(1.0, alpha)), False, False
+    return max(0.0, min(1.0, alpha)), False
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +384,7 @@ class _OverlayRenderHook(MethodHook):
             if not _gl_res["initialized"]:
                 _init_gl_darken(self.plugin)
 
-            alpha, should_switch, complete = _calc_fade_alpha()
+            alpha, complete = _calc_fade_alpha()
 
             if complete:
                 _fade_state["active"] = False
@@ -404,10 +396,6 @@ class _OverlayRenderHook(MethodHook):
                     _set_bool_field(icv, "flipAnimationInProgress", False)
                 self.plugin.log("[SmoothFade] Video fade complete")
                 return
-
-            if should_switch:
-                _fade_state["camera_switched"] = True
-                self._schedule_switch()
 
             # Apply darkening - double pass for deeper blacks
             _apply_darken(alpha, passes=2)
@@ -427,44 +415,6 @@ class _OverlayRenderHook(MethodHook):
             icv = _fade_state["icv"]
             if icv is not None:
                 _set_bool_field(icv, "flipAnimationInProgress", False)
-
-    def _schedule_switch(self):
-        """Schedule camera switch on UI thread (can't call from GL thread)."""
-        plugin = self.plugin
-
-        def do_switch():
-            icv = _fade_state["icv"]
-            if icv is None:
-                return
-            try:
-                is_front = _get_field(icv, "isFrontface")
-                new_front = not bool(is_front)
-                _set_bool_field(icv, "isFrontface", new_front)
-                plugin.log(
-                    f"[SmoothFade] Switch: {is_front} -> {new_front}"
-                )
-
-                try:
-                    _call_method(icv, "updateFlash")
-                except Exception:
-                    pass
-
-                _set_bool_field(icv, "cameraReady", False)
-                _set_float_field(icv, "cameraZoom", 0.0)
-
-                session = _get_field(icv, "cameraXSession")
-                if session is not None:
-                    _call_method(session, "switchCamera")
-                    plugin.log("[SmoothFade] switchCamera() called")
-                else:
-                    plugin.log(
-                        "[SmoothFade] ERROR: cameraXSession null!"
-                    )
-
-            except Exception as e:
-                plugin.log(f"[SmoothFade] Switch error: {e}")
-
-        run_on_ui_thread(do_switch)
 
 
 # ---------------------------------------------------------------------------
@@ -532,11 +482,42 @@ class _CameraFadeHook(MethodHook):
             self.plugin.log(traceback.format_exc())
 
 
+def _do_switch(plugin, icv):
+    """Perform the actual camera switch (runs on UI thread)."""
+    try:
+        is_front = _get_field(icv, "isFrontface")
+        new_front = not bool(is_front)
+        _set_bool_field(icv, "isFrontface", new_front)
+        plugin.log(
+            f"[SmoothFade] Switch: {is_front} -> {new_front}"
+        )
+
+        try:
+            _call_method(icv, "updateFlash")
+        except Exception:
+            pass
+
+        _set_bool_field(icv, "cameraReady", False)
+        _set_float_field(icv, "cameraZoom", 0.0)
+
+        session = _get_field(icv, "cameraXSession")
+        if session is not None:
+            _call_method(session, "switchCamera")
+            plugin.log("[SmoothFade] switchCamera() called")
+        else:
+            plugin.log(
+                "[SmoothFade] ERROR: cameraXSession null!"
+            )
+
+    except Exception as e:
+        plugin.log(f"[SmoothFade] Switch error: {e}")
+
+
 def _start_fade(plugin, icv):
     """
     Begin the dip-to-black fade transition.
-    The actual camera switch happens at the midpoint (250ms) when
-    the screen is fully black, triggered by _OverlayRenderHook.
+    Camera switch fires IMMEDIATELY to give maximum init time.
+    The darken shader hides the switch while camera initializes.
     """
 
     # Lottie icon animation
@@ -558,13 +539,16 @@ def _start_fade(plugin, icv):
     # Activate fade state
     _fade_state["active"] = True
     _fade_state["start_time"] = JSystem.currentTimeMillis()
-    _fade_state["camera_switched"] = False
+    _fade_state["camera_switched"] = True  # switched immediately
     _fade_state["icv"] = icv
     _fade_state["plugin"] = plugin
     plugin.log(
         f"[SmoothFade] Fade activated "
         f"(half={_fade_half_ms}ms, hold={_HOLD_MS}ms)"
     )
+
+    # Switch camera IMMEDIATELY for maximum init time
+    _do_switch(plugin, icv)
 
     half = _fade_half_ms
     hold = _HOLD_MS
@@ -641,7 +625,7 @@ def _start_fade(plugin, icv):
 class SmoothCameraFadePlugin(BasePlugin):
 
     def on_plugin_load(self):
-        self.log("[SmoothFade] Loading v4.10.0...")
+        self.log("[SmoothFade] Loading v4.11.0...")
         self._load_duration_setting()
         self._setup_hooks()
         self.log("[SmoothFade] Plugin loaded")
@@ -756,7 +740,7 @@ class SmoothCameraFadePlugin(BasePlugin):
 
     def create_settings(self) -> List[Any]:
         return [
-            Header(text="Smooth Camera Fade v4.10"),
+            Header(text="Smooth Camera Fade v4.11"),
             Input(
                 key="fade_duration_ms",
                 text="Fade duration (ms)",
