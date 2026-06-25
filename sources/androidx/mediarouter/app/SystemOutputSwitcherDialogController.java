@@ -1,0 +1,149 @@
+package androidx.mediarouter.app;
+
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.ResolveInfo;
+import android.media.AudioDeviceInfo;
+import android.media.AudioManager;
+import android.media.MediaRouter2;
+import android.os.Build;
+import java.util.Iterator;
+
+/* JADX INFO: loaded from: classes4.dex */
+public abstract class SystemOutputSwitcherDialogController {
+    /* JADX WARN: Removed duplicated region for block: B:15:0x0028  */
+    /*
+        Code decompiled incorrectly, please refer to instructions dump.
+        To view partially-correct code enable 'Show inconsistent code' option in preferences
+    */
+    public static boolean showDialog(android.content.Context r4) {
+        /*
+            int r0 = android.os.Build.VERSION.SDK_INT
+            r1 = 34
+            r2 = 1
+            r3 = 0
+            if (r0 < r1) goto Ld
+            boolean r0 = showDialogForAndroidUAndAbove(r4)
+            goto L29
+        Ld:
+            r1 = 31
+            if (r0 < r1) goto L1f
+            boolean r0 = showDialogForAndroidSAndT(r4)
+            if (r0 != 0) goto L1d
+            boolean r0 = showDialogForAndroidR(r4)
+            if (r0 == 0) goto L28
+        L1d:
+            r0 = r2
+            goto L29
+        L1f:
+            r1 = 30
+            if (r0 != r1) goto L28
+            boolean r0 = showDialogForAndroidR(r4)
+            goto L29
+        L28:
+            r0 = r3
+        L29:
+            if (r0 == 0) goto L2c
+            return r2
+        L2c:
+            boolean r0 = isRunningOnWear(r4)
+            if (r0 == 0) goto L39
+            boolean r4 = showBluetoothSettingsFragment(r4)
+            if (r4 == 0) goto L39
+            return r2
+        L39:
+            return r3
+        */
+        throw new UnsupportedOperationException("Method not decompiled: androidx.mediarouter.app.SystemOutputSwitcherDialogController.showDialog(android.content.Context):boolean");
+    }
+
+    private static boolean showDialogForAndroidUAndAbove(Context context) {
+        int i = Build.VERSION.SDK_INT;
+        if (i < 30) {
+            return false;
+        }
+        MediaRouter2 api30Impl = Api30Impl.getInstance(context);
+        if (i >= 34) {
+            return Api34Impl.showSystemOutputSwitcher(api30Impl);
+        }
+        return false;
+    }
+
+    private static boolean showDialogForAndroidSAndT(Context context) {
+        ApplicationInfo applicationInfo;
+        Intent intentPutExtra = new Intent().setAction("com.android.systemui.action.LAUNCH_MEDIA_OUTPUT_DIALOG").setPackage("com.android.systemui").putExtra("package_name", context.getPackageName());
+        Iterator<ResolveInfo> it = context.getPackageManager().queryBroadcastReceivers(intentPutExtra, 0).iterator();
+        while (it.hasNext()) {
+            ActivityInfo activityInfo = it.next().activityInfo;
+            if (activityInfo != null && (applicationInfo = activityInfo.applicationInfo) != null && (applicationInfo.flags & 129) != 0) {
+                context.sendBroadcast(intentPutExtra);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean showDialogForAndroidR(Context context) {
+        ApplicationInfo applicationInfo;
+        Intent intentPutExtra = new Intent().addFlags(268435456).setAction("com.android.settings.panel.action.MEDIA_OUTPUT").putExtra("com.android.settings.panel.extra.PACKAGE_NAME", context.getPackageName());
+        Iterator<ResolveInfo> it = context.getPackageManager().queryIntentActivities(intentPutExtra, 0).iterator();
+        while (it.hasNext()) {
+            ActivityInfo activityInfo = it.next().activityInfo;
+            if (activityInfo != null && (applicationInfo = activityInfo.applicationInfo) != null && (applicationInfo.flags & 129) != 0) {
+                intentPutExtra.setPackage(applicationInfo.packageName);
+                context.startActivity(intentPutExtra);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean showBluetoothSettingsFragment(Context context) {
+        ApplicationInfo applicationInfo;
+        Intent intentPutExtra = new Intent("android.settings.BLUETOOTH_SETTINGS").addFlags(268468224).putExtra("EXTRA_CONNECTION_ONLY", true).putExtra("android.bluetooth.devicepicker.extra.FILTER_TYPE", 1).putExtra("EXTRA_CLOSE_ON_CONNECT", !isSuitableDeviceAlreadyConnectedAsAudioOutput(context));
+        Iterator<ResolveInfo> it = context.getPackageManager().queryIntentActivities(intentPutExtra, 0).iterator();
+        while (it.hasNext()) {
+            ActivityInfo activityInfo = it.next().activityInfo;
+            if (activityInfo != null && (applicationInfo = activityInfo.applicationInfo) != null && (applicationInfo.flags & 129) != 0) {
+                intentPutExtra.setPackage(applicationInfo.packageName);
+                context.startActivity(intentPutExtra);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isRunningOnWear(Context context) {
+        return context.getPackageManager().hasSystemFeature("android.hardware.type.watch");
+    }
+
+    private static boolean isSuitableDeviceAlreadyConnectedAsAudioOutput(Context context) {
+        return Api23Impl.isSuitableDeviceAlreadyConnectedAsAudioOutput(context);
+    }
+
+    public static class Api30Impl {
+        public static MediaRouter2 getInstance(Context context) {
+            return MediaRouter2.getInstance(context);
+        }
+    }
+
+    public static class Api34Impl {
+        public static boolean showSystemOutputSwitcher(MediaRouter2 mediaRouter2) {
+            return mediaRouter2.showSystemOutputSwitcher();
+        }
+    }
+
+    public static final class Api23Impl {
+        public static boolean isSuitableDeviceAlreadyConnectedAsAudioOutput(Context context) {
+            for (AudioDeviceInfo audioDeviceInfo : ((AudioManager) context.getSystemService(AudioManager.class)).getDevices(2)) {
+                int type = audioDeviceInfo.getType();
+                if (type == 3 || type == 4 || type == 5 || type == 6 || type == 8 || type == 11 || type == 30 || type == 22 || type == 23 || type == 26 || type == 27) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+}

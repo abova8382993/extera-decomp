@@ -1,0 +1,108 @@
+package org.mvel2.conversion;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.HashMap;
+import java.util.Map;
+import kotlin.coroutines.Continuation;
+import org.mvel2.ConversionHandler;
+
+/* JADX INFO: loaded from: classes.dex */
+public class DoubleCH implements ConversionHandler {
+    private static final Map<Class, Converter> CNV;
+    private static Converter stringConverter;
+
+    static {
+        HashMap map = new HashMap();
+        CNV = map;
+        Converter converter = new Converter() { // from class: org.mvel2.conversion.DoubleCH.1
+            @Override // org.mvel2.conversion.Converter
+            public Object convert(Object obj) {
+                String str = (String) obj;
+                return str.length() == 0 ? Double.valueOf(0.0d) : Double.valueOf(Double.parseDouble(str));
+            }
+        };
+        stringConverter = converter;
+        map.put(String.class, converter);
+        map.put(Object.class, new Converter() { // from class: org.mvel2.conversion.DoubleCH.2
+            @Override // org.mvel2.conversion.Converter
+            public Object convert(Object obj) {
+                return DoubleCH.stringConverter.convert(String.valueOf(obj));
+            }
+        });
+        map.put(BigDecimal.class, new Converter() { // from class: org.mvel2.conversion.DoubleCH.3
+            @Override // org.mvel2.conversion.Converter
+            public Double convert(Object obj) {
+                return Double.valueOf(((BigDecimal) obj).doubleValue());
+            }
+        });
+        map.put(BigInteger.class, new Converter() { // from class: org.mvel2.conversion.DoubleCH.4
+            @Override // org.mvel2.conversion.Converter
+            public Double convert(Object obj) {
+                return Double.valueOf(((BigInteger) obj).doubleValue());
+            }
+        });
+        map.put(Double.class, new Converter() { // from class: org.mvel2.conversion.DoubleCH.5
+            @Override // org.mvel2.conversion.Converter
+            public Object convert(Object obj) {
+                return obj;
+            }
+        });
+        map.put(Float.class, new Converter() { // from class: org.mvel2.conversion.DoubleCH.6
+            @Override // org.mvel2.conversion.Converter
+            public Double convert(Object obj) {
+                Float f = (Float) obj;
+                if (f.floatValue() > Double.MAX_VALUE) {
+                    ShortCH$6$$ExternalSyntheticBUOutline0.m1015m("cannot coerce Float to Double since the value (", obj, ") exceeds that maximum precision of Double.");
+                    return null;
+                }
+                return Double.valueOf(f.doubleValue());
+            }
+        });
+        map.put(Integer.class, new Converter() { // from class: org.mvel2.conversion.DoubleCH.7
+            @Override // org.mvel2.conversion.Converter
+            public Double convert(Object obj) {
+                return Double.valueOf(((Integer) obj).doubleValue());
+            }
+        });
+        map.put(Short.class, new Converter() { // from class: org.mvel2.conversion.DoubleCH.8
+            @Override // org.mvel2.conversion.Converter
+            public Double convert(Object obj) {
+                return Double.valueOf(((Short) obj).doubleValue());
+            }
+        });
+        map.put(Long.class, new Converter() { // from class: org.mvel2.conversion.DoubleCH.9
+            @Override // org.mvel2.conversion.Converter
+            public Double convert(Object obj) {
+                return Double.valueOf(((Long) obj).doubleValue());
+            }
+        });
+        map.put(Boolean.class, new Converter() { // from class: org.mvel2.conversion.DoubleCH.10
+            @Override // org.mvel2.conversion.Converter
+            public Double convert(Object obj) {
+                return ((Boolean) obj).booleanValue() ? Double.valueOf(1.0d) : Double.valueOf(0.0d);
+            }
+        });
+    }
+
+    /* JADX WARN: Type inference failed for: r0v0, types: [java.lang.Class, kotlin.coroutines.Continuation] */
+    /* JADX WARN: Type inference failed for: r0v1, types: [void] */
+    /* JADX WARN: Type inference incomplete: some casts might be missing */
+    @Override // org.mvel2.ConversionHandler
+    public Object convertFrom(Object obj) {
+        Map<Class, Converter> map = CNV;
+        if (map.probeCoroutineSuspended((Continuation<?>) obj.getClass()) == 0) {
+            ByteCH$$ExternalSyntheticBUOutline0.m1014m(obj.getClass().getName(), Integer.class.getName());
+            return null;
+        }
+        return map.get(obj.getClass()).convert(obj);
+    }
+
+    /* JADX WARN: Multi-variable type inference failed */
+    /* JADX WARN: Type inference failed for: r0v2, types: [boolean, void] */
+    /* JADX WARN: Type inference incomplete: some casts might be missing */
+    @Override // org.mvel2.ConversionHandler
+    public boolean canConvertFrom(Class cls) {
+        return CNV.probeCoroutineSuspended((Continuation<?>) cls);
+    }
+}

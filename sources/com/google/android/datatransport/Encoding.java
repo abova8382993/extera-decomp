@@ -1,0 +1,43 @@
+package com.google.android.datatransport;
+
+import p005c.g$$ExternalSyntheticBUOutline2;
+
+/* JADX INFO: loaded from: classes.dex */
+public final class Encoding {
+    private final String name;
+
+    /* JADX INFO: renamed from: of */
+    public static Encoding m294of(String str) {
+        return new Encoding(str);
+    }
+
+    public String getName() {
+        return this.name;
+    }
+
+    private Encoding(String str) {
+        if (str == null) {
+            g$$ExternalSyntheticBUOutline2.m208m("name is null");
+            throw null;
+        }
+        this.name = str;
+    }
+
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (obj instanceof Encoding) {
+            return this.name.equals(((Encoding) obj).name);
+        }
+        return false;
+    }
+
+    public int hashCode() {
+        return this.name.hashCode() ^ 1000003;
+    }
+
+    public String toString() {
+        return "Encoding{name=\"" + this.name + "\"}";
+    }
+}

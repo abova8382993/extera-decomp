@@ -1,0 +1,66 @@
+package com.android.dex;
+
+/* JADX INFO: loaded from: classes4.dex */
+public final class TypeList implements Comparable<TypeList> {
+    public static final TypeList EMPTY = new TypeList(null, Dex.EMPTY_SHORT_ARRAY);
+    private final Dex dex;
+    private final short[] types;
+
+    public TypeList(Dex dex, short[] sArr) {
+        this.dex = dex;
+        this.types = sArr;
+    }
+
+    public short[] getTypes() {
+        return this.types;
+    }
+
+    /* JADX WARN: Code restructure failed: missing block: B:13:0x0021, code lost:
+    
+        return com.android.dex.util.Unsigned.compare(r1.length, r5.types.length);
+     */
+    @Override // java.lang.Comparable
+    /*
+        Code decompiled incorrectly, please refer to instructions dump.
+        To view partially-correct code enable 'Show inconsistent code' option in preferences
+    */
+    public int compareTo(com.android.dex.TypeList r5) {
+        /*
+            r4 = this;
+            r0 = 0
+        L1:
+            short[] r1 = r4.types
+            int r2 = r1.length
+            if (r0 >= r2) goto L19
+            short[] r2 = r5.types
+            int r3 = r2.length
+            if (r0 >= r3) goto L19
+            short r1 = r1[r0]
+            short r2 = r2[r0]
+            if (r1 == r2) goto L16
+            int r4 = com.android.dex.util.Unsigned.compare(r1, r2)
+            return r4
+        L16:
+            int r0 = r0 + 1
+            goto L1
+        L19:
+            int r4 = r1.length
+            short[] r5 = r5.types
+            int r5 = r5.length
+            int r4 = com.android.dex.util.Unsigned.compare(r4, r5)
+            return r4
+        */
+        throw new UnsupportedOperationException("Method not decompiled: com.android.dex.TypeList.compareTo(com.android.dex.TypeList):int");
+    }
+
+    public String toString() {
+        StringBuilder sb = new StringBuilder("(");
+        int length = this.types.length;
+        for (int i = 0; i < length; i++) {
+            Dex dex = this.dex;
+            sb.append(dex != null ? dex.typeNames().get(this.types[i]) : Short.valueOf(this.types[i]));
+        }
+        sb.append(")");
+        return sb.toString();
+    }
+}

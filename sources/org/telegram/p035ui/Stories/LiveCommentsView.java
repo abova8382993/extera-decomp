@@ -1,0 +1,2625 @@
+package org.telegram.p035ui.Stories;
+
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
+import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.ColorFilter;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffColorFilter;
+import android.graphics.PorterDuffXfermode;
+import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.drawable.Drawable;
+import android.text.TextPaint;
+import android.text.TextUtils;
+import android.text.style.CharacterStyle;
+import android.text.style.ReplacementSpan;
+import android.util.Pair;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewPropertyAnimator;
+import android.view.animation.LinearInterpolator;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
+import androidx.recyclerview.widget.DefaultItemAnimator;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import kotlin.jvm.internal.LongCompanionObject;
+import okhttp3.internal.url._UrlKt;
+import org.telegram.messenger.AiTonesController$$ExternalSyntheticLambda0;
+import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.C2797R;
+import org.telegram.messenger.ChatObject;
+import org.telegram.messenger.DialogObject;
+import org.telegram.messenger.LocaleController;
+import org.telegram.messenger.MessagesController;
+import org.telegram.messenger.NotificationCenter;
+import org.telegram.messenger.UserConfig;
+import org.telegram.messenger.Utilities;
+import org.telegram.p035ui.ActionBar.BottomSheet;
+import org.telegram.p035ui.ActionBar.Theme;
+import org.telegram.p035ui.Cells.CheckBoxCell;
+import org.telegram.p035ui.Cells.HeaderCell;
+import org.telegram.p035ui.Cells.TextInfoPrivacyCell;
+import org.telegram.p035ui.Components.AnimatedFloat;
+import org.telegram.p035ui.Components.AvatarDrawable;
+import org.telegram.p035ui.Components.BackupImageView;
+import org.telegram.p035ui.Components.Bulletin;
+import org.telegram.p035ui.Components.BulletinFactory;
+import org.telegram.p035ui.Components.CheckBox2;
+import org.telegram.p035ui.Components.ColoredImageSpan;
+import org.telegram.p035ui.Components.CubicBezierInterpolator;
+import org.telegram.p035ui.Components.ItemOptions;
+import org.telegram.p035ui.Components.LayoutHelper;
+import org.telegram.p035ui.Components.RecyclerListView;
+import org.telegram.p035ui.Components.ScaleStateListAnimator;
+import org.telegram.p035ui.Components.Text;
+import org.telegram.p035ui.Components.UItem;
+import org.telegram.p035ui.Components.UniversalAdapter;
+import org.telegram.p035ui.Components.UniversalRecyclerView;
+import org.telegram.p035ui.Components.spoilers.SpoilersTextView;
+import org.telegram.p035ui.GradientClip;
+import org.telegram.p035ui.ProfileActivity;
+import org.telegram.p035ui.Stars.StarsIntroActivity;
+import org.telegram.p035ui.Stars.StarsReactionsSheet;
+import org.telegram.p035ui.Stories.recorder.ButtonWithCounterView;
+import org.telegram.tgnet.ConnectionsManager;
+import org.telegram.tgnet.RequestDelegate;
+import org.telegram.tgnet.TLObject;
+import org.telegram.tgnet.TLRPC;
+import org.telegram.tgnet.p034tl.TL_phone;
+import org.telegram.tgnet.p034tl.TL_update;
+
+/* JADX INFO: loaded from: classes7.dex */
+public abstract class LiveCommentsView extends FrameLayout implements NotificationCenter.NotificationCenterDelegate {
+    private final UniversalAdapter adapter;
+    private boolean allowTouches;
+    public final ImageView arrowButton;
+    private Bulletin.UndoButton bulletinButton;
+    private Bulletin.TwoLineAnimatedLottieLayout bulletinLayout;
+    private boolean callHighlight;
+    private Runnable closeBulletin;
+    private ValueAnimator collapseAnimator;
+    private boolean collapsed;
+    private final int currentAccount;
+    private long dialogId;
+    private final GradientClip gradientClip;
+    private boolean hasTopMessages;
+    private long highlightingDialog;
+    private int highlightingMessageId;
+    private TLRPC.InputGroupCall inputCall;
+    private float keyboardFinalOffset;
+    private float keyboardOffset;
+    private float keyboardT;
+    private long lastMinStars;
+    private int lastNow;
+    private final LinearLayoutManager layoutManager;
+    public final RecyclerListView listView;
+    private LivePlayer livePlayer;
+    private long localStars;
+    public int maxReadId;
+    private final ArrayList<Message> messages;
+    private Runnable pollStarsRunnable;
+    private boolean polling;
+    private Runnable removeTopSendersRunnable;
+    private boolean sentStars;
+    private final View shadowView;
+    private Bulletin starsBulletin;
+    private final StoryViewer storyViewer;
+    private Bulletin.TimerView timerView;
+    private final UniversalAdapter topAdapter;
+    private final FrameLayout topBulletinContainer;
+    private ArrayList<TL_phone.groupCallDonor> topDonors;
+    private final LinearLayoutManager topLayoutManager;
+    public final RecyclerListView topListView;
+    private final ArrayList<TopSender> topMessages;
+    private final HashMap<Long, Integer> topPlaces;
+    private long totalStars;
+    private final Runnable updateAdapters;
+
+    public static class Message {
+        public int date;
+        public long dialogId;
+        public boolean fromAdmin;
+
+        /* JADX INFO: renamed from: id */
+        public int f1789id;
+        public boolean isReaction;
+        public int place;
+        public long stars;
+        public TLRPC.TL_textWithEntities text;
+    }
+
+    public TLRPC.Peer getDefaultSendAs() {
+        return null;
+    }
+
+    public abstract boolean isMe(long j);
+
+    public abstract void onCancelledStarReaction(long j);
+
+    public abstract void onMessagesCountUpdated();
+
+    public abstract void onStarReaction(long j, int i, int i2);
+
+    public abstract void onStarsButtonCancelled();
+
+    public abstract void onStarsButtonPressed(long j, boolean z);
+
+    public abstract void onStarsCountUpdated();
+
+    public static class TopSender {
+        public int currentAccount;
+        public long dialogId;
+        public int lastSentDate;
+        private long max_stars;
+        public ArrayList<Message> messages = new ArrayList<>();
+        public int place;
+
+        public int getStars() {
+            return getStars(ConnectionsManager.getInstance(this.currentAccount).getCurrentTime());
+        }
+
+        public int getStars(int i) {
+            ArrayList<Message> arrayList = this.messages;
+            int size = arrayList.size();
+            int i2 = 0;
+            int i3 = 0;
+            while (i3 < size) {
+                Message message = arrayList.get(i3);
+                i3++;
+                Message message2 = message;
+                long j = message2.stars;
+                if (j > 0 && i - message2.date <= HighlightMessageSheet.getTierOption(this.currentAccount, (int) j, HighlightMessageSheet.TIER_PERIOD)) {
+                    i2 += (int) message2.stars;
+                }
+            }
+            this.max_stars = Math.max(this.max_stars, i2);
+            return i2;
+        }
+
+        public float getProgress() {
+            return getProgress(ConnectionsManager.getInstance(this.currentAccount).getCurrentTime());
+        }
+
+        public float getProgress(int i) {
+            ArrayList<Message> arrayList = this.messages;
+            int size = arrayList.size();
+            int iMax = 0;
+            int iMin = i;
+            int i2 = 0;
+            while (i2 < size) {
+                Message message = arrayList.get(i2);
+                i2++;
+                Message message2 = message;
+                if (message2.stars > 0) {
+                    iMin = Math.min(iMin, message2.date);
+                    iMax = Math.max(iMax, message2.date + HighlightMessageSheet.getTierOption(this.currentAccount, (int) message2.stars, HighlightMessageSheet.TIER_PERIOD));
+                }
+            }
+            return AndroidUtilities.ilerp(i, iMax, iMin);
+        }
+
+        public int expiresAfter(int i) {
+            ArrayList<Message> arrayList = this.messages;
+            int size = arrayList.size();
+            int iMin = i;
+            int iMax = 0;
+            int i2 = 0;
+            while (i2 < size) {
+                Message message = arrayList.get(i2);
+                i2++;
+                Message message2 = message;
+                if (message2.stars > 0) {
+                    iMin = Math.min(iMin, message2.date);
+                    iMax = Math.max(iMax, message2.date + HighlightMessageSheet.getTierOption(this.currentAccount, (int) message2.stars, HighlightMessageSheet.TIER_PERIOD));
+                }
+            }
+            return Math.max(0, iMax - i);
+        }
+
+        public boolean isExpired(int i) {
+            ArrayList<Message> arrayList = this.messages;
+            int size = arrayList.size();
+            int i2 = 0;
+            while (i2 < size) {
+                Message message = arrayList.get(i2);
+                i2++;
+                Message message2 = message;
+                long j = message2.stars;
+                if (j > 0 && i - message2.date <= HighlightMessageSheet.getTierOption(this.currentAccount, (int) j, HighlightMessageSheet.TIER_PERIOD)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        public void updateLastSentDate() {
+            updateLastSentDate(ConnectionsManager.getInstance(this.currentAccount).getCurrentTime());
+        }
+
+        public void updateLastSentDate(int i) {
+            ArrayList<Message> arrayList = this.messages;
+            int size = arrayList.size();
+            int i2 = 0;
+            while (i2 < size) {
+                Message message = arrayList.get(i2);
+                i2++;
+                Message message2 = message;
+                if (message2.stars > 0) {
+                    i = Math.min(i, message2.date);
+                }
+            }
+            this.lastSentDate = i;
+        }
+    }
+
+    /* JADX INFO: renamed from: removeTopSenders */
+    public void lambda$scheduleRemovingTopSenders$0() {
+        Runnable runnable = this.removeTopSendersRunnable;
+        if (runnable != null) {
+            AndroidUtilities.cancelRunOnUIThread(runnable);
+            this.removeTopSendersRunnable = null;
+        }
+        int currentTime = ConnectionsManager.getInstance(this.currentAccount).getCurrentTime();
+        for (int size = this.topMessages.size() - 1; size >= 0; size--) {
+            if (this.topMessages.get(size).isExpired(currentTime)) {
+                this.topMessages.remove(size);
+            }
+        }
+        this.lastNow = currentTime;
+        Collections.sort(this.topMessages, new LiveCommentsView$$ExternalSyntheticLambda0(this));
+        this.topAdapter.update(true);
+        updateTopMessages(true);
+        scheduleRemovingTopSenders();
+    }
+
+    private void scheduleRemovingTopSenders() {
+        Runnable runnable = this.removeTopSendersRunnable;
+        if (runnable != null) {
+            AndroidUtilities.cancelRunOnUIThread(runnable);
+            this.removeTopSendersRunnable = null;
+        }
+        int currentTime = ConnectionsManager.getInstance(this.currentAccount).getCurrentTime();
+        ArrayList<TopSender> arrayList = this.topMessages;
+        int size = arrayList.size();
+        int i = 0;
+        long jMin = Long.MAX_VALUE;
+        while (i < size) {
+            TopSender topSender = arrayList.get(i);
+            i++;
+            jMin = Math.min(jMin, ((long) topSender.expiresAfter(currentTime)) * 1000);
+        }
+        if (jMin >= LongCompanionObject.MAX_VALUE) {
+            return;
+        }
+        Runnable runnable2 = new Runnable() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda17
+            @Override // java.lang.Runnable
+            public final void run() {
+                this.f$0.lambda$scheduleRemovingTopSenders$0();
+            }
+        };
+        this.removeTopSendersRunnable = runnable2;
+        AndroidUtilities.runOnUIThread(runnable2, jMin);
+    }
+
+    public LiveCommentsView(Context context, final StoryViewer storyViewer, final ViewGroup viewGroup, View view, FrameLayout frameLayout) {
+        super(context);
+        this.messages = new ArrayList<>();
+        this.topMessages = new ArrayList<>();
+        this.topPlaces = new HashMap<>();
+        this.maxReadId = -1;
+        this.allowTouches = true;
+        this.gradientClip = new GradientClip();
+        int i = UserConfig.selectedAccount;
+        this.currentAccount = i;
+        this.topDonors = new ArrayList<>();
+        this.pollStarsRunnable = new Runnable() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda1
+            @Override // java.lang.Runnable
+            public final void run() {
+                this.f$0.lambda$new$9();
+            }
+        };
+        this.closeBulletin = new Runnable() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda2
+            @Override // java.lang.Runnable
+            public final void run() {
+                this.f$0.lambda$new$12();
+            }
+        };
+        this.collapsed = false;
+        this.updateAdapters = new Runnable() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda3
+            @Override // java.lang.Runnable
+            public final void run() {
+                this.f$0.lambda$new$17();
+            }
+        };
+        this.shadowView = view;
+        this.storyViewer = storyViewer;
+        this.topBulletinContainer = frameLayout;
+        view.setAlpha(0.5f);
+        C68631 c68631 = new RecyclerListView(context) { // from class: org.telegram.ui.Stories.LiveCommentsView.1
+            public C68631(Context context2) {
+                super(context2);
+            }
+
+            @Override // android.view.View
+            public void invalidate() {
+                super.invalidate();
+                LiveCommentsView.this.invalidate();
+            }
+
+            @Override // org.telegram.p035ui.Components.RecyclerListView
+            public Integer getSelectorColor(int i2) {
+                return 0;
+            }
+
+            @Override // org.telegram.p035ui.Components.RecyclerListView, android.view.ViewGroup, android.view.View
+            public boolean dispatchTouchEvent(MotionEvent motionEvent) {
+                if (LiveCommentsView.this.isCollapsed()) {
+                    return false;
+                }
+                return super.dispatchTouchEvent(motionEvent);
+            }
+
+            public int getMaxVisibleId() {
+                if (LiveCommentsView.this.collapsed) {
+                    return -1;
+                }
+                for (int i2 = 0; i2 < getChildCount(); i2++) {
+                    View childAt = getChildAt(i2);
+                    if (childAt instanceof LiveCommentView) {
+                        LiveCommentView liveCommentView = (LiveCommentView) childAt;
+                        if (liveCommentView.message != null) {
+                            return liveCommentView.message.f1789id;
+                        }
+                    }
+                }
+                return -1;
+            }
+
+            @Override // org.telegram.p035ui.Components.RecyclerListView, android.view.ViewGroup, android.view.View
+            public void dispatchDraw(Canvas canvas) {
+                int maxVisibleId = getMaxVisibleId();
+                LiveCommentsView liveCommentsView = LiveCommentsView.this;
+                if (maxVisibleId > liveCommentsView.maxReadId) {
+                    liveCommentsView.maxReadId = maxVisibleId;
+                    liveCommentsView.onMessagesCountUpdated();
+                }
+                super.dispatchDraw(canvas);
+            }
+
+            @Override // org.telegram.p035ui.Components.RecyclerListView, androidx.recyclerview.widget.RecyclerView, android.view.View
+            public void onMeasure(int i2, int i3) {
+                int size = View.MeasureSpec.getSize(i2);
+                View.MeasureSpec.getSize(i3);
+                super.onMeasure(i2, View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.getMode(i3)));
+            }
+        };
+        this.listView = c68631;
+        c68631.setWillNotDraw(false);
+        LinearLayoutManager linearLayoutManager = new LinearLayoutManager(context2, 1, true);
+        this.layoutManager = linearLayoutManager;
+        c68631.setLayoutManager(linearLayoutManager);
+        C68642 c68642 = new UniversalAdapter(c68631, context2, i, 0, false, new Utilities.Callback2() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda4
+            @Override // org.telegram.messenger.Utilities.Callback2
+            public final void run(Object obj, Object obj2) {
+                this.f$0.fillItems((ArrayList) obj, (UniversalAdapter) obj2);
+            }
+        }, new DarkThemeResourceProvider()) { // from class: org.telegram.ui.Stories.LiveCommentsView.2
+            public C68642(RecyclerListView c686312, Context context2, int i2, int i3, boolean z, Utilities.Callback2 callback2, Theme.ResourcesProvider resourcesProvider) {
+                super(c686312, context2, i2, i3, z, callback2, resourcesProvider);
+            }
+
+            @Override // org.telegram.p035ui.Components.UniversalAdapter, androidx.recyclerview.widget.RecyclerView.Adapter
+            public void onBindViewHolder(RecyclerView.ViewHolder viewHolder, int i2) {
+                super.onBindViewHolder(viewHolder, i2);
+                if (LiveCommentsView.this.callHighlight) {
+                    View view2 = viewHolder.itemView;
+                    if (view2 instanceof LiveCommentView) {
+                        LiveCommentView liveCommentView = (LiveCommentView) view2;
+                        if (liveCommentView.message == null || liveCommentView.message.f1789id != LiveCommentsView.this.highlightingMessageId) {
+                            return;
+                        }
+                        liveCommentView.highlight();
+                        LiveCommentsView.this.callHighlight = false;
+                    }
+                }
+            }
+
+            @Override // org.telegram.p035ui.Components.UniversalAdapter, androidx.recyclerview.widget.RecyclerView.Adapter
+            public void onViewAttachedToWindow(RecyclerView.ViewHolder viewHolder) {
+                super.onViewAttachedToWindow(viewHolder);
+                if (LiveCommentsView.this.callHighlight) {
+                    View view2 = viewHolder.itemView;
+                    if (view2 instanceof LiveCommentView) {
+                        LiveCommentView liveCommentView = (LiveCommentView) view2;
+                        if (liveCommentView.message == null || liveCommentView.message.f1789id != LiveCommentsView.this.highlightingMessageId) {
+                            return;
+                        }
+                        liveCommentView.highlight();
+                        LiveCommentsView.this.callHighlight = false;
+                    }
+                }
+            }
+        };
+        this.adapter = c68642;
+        c686312.setAdapter(c68642);
+        c68642.setApplyBackground(false);
+        c686312.setPadding(AndroidUtilities.m1036dp(8.0f), AndroidUtilities.m1036dp(7.5f), AndroidUtilities.m1036dp(8.0f), AndroidUtilities.m1036dp(7.5f));
+        c686312.setClipToPadding(false);
+        addView(c686312, LayoutHelper.createFrame(-1, -1.0f, 87, 0.0f, 0.0f, 0.0f, 34.0f));
+        c686312.setOnItemClickListener(new RecyclerListView.OnItemClickListener() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda5
+            @Override // org.telegram.ui.Components.RecyclerListView.OnItemClickListener
+            public final void onItemClick(View view2, int i2) {
+                this.f$0.lambda$new$5(viewGroup, storyViewer, view2, i2);
+            }
+        });
+        C68653 c68653 = new DefaultItemAnimator() { // from class: org.telegram.ui.Stories.LiveCommentsView.3
+            @Override // androidx.recyclerview.widget.DefaultItemAnimator
+            public float animateByScale(View view2) {
+                return 0.5f;
+            }
+
+            public C68653() {
+            }
+
+            @Override // androidx.recyclerview.widget.DefaultItemAnimator
+            public void onMoveAnimationUpdate(RecyclerView.ViewHolder viewHolder) {
+                super.onMoveAnimationUpdate(viewHolder);
+                LiveCommentsView.this.listView.invalidate();
+            }
+
+            @Override // androidx.recyclerview.widget.DefaultItemAnimator
+            public void onAddAnimationUpdate(RecyclerView.ViewHolder viewHolder) {
+                super.onAddAnimationUpdate(viewHolder);
+                LiveCommentsView.this.listView.invalidate();
+            }
+        };
+        c68653.setSupportsChangeAnimations(false);
+        c68653.setDelayAnimations(false);
+        CubicBezierInterpolator cubicBezierInterpolator = CubicBezierInterpolator.EASE_OUT_QUINT;
+        c68653.setInterpolator(cubicBezierInterpolator);
+        c68653.setDurations(280L);
+        c68653.setDelayIncrement(14L);
+        c686312.setItemAnimator(c68653);
+        ImageView imageView = new ImageView(context2);
+        this.arrowButton = imageView;
+        imageView.setImageResource(C2797R.drawable.msg_arrowright);
+        imageView.setColorFilter(new PorterDuffColorFilter(-1, PorterDuff.Mode.SRC_IN));
+        imageView.setRotation(90.0f);
+        imageView.setBackground(Theme.createSelectorDrawable(1090519039));
+        imageView.setOnClickListener(new View.OnClickListener() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda6
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view2) {
+                this.f$0.lambda$new$6(view2);
+            }
+        });
+        C68664 c68664 = new RecyclerListView(context2) { // from class: org.telegram.ui.Stories.LiveCommentsView.4
+            public C68664(Context context2) {
+                super(context2);
+            }
+
+            @Override // org.telegram.p035ui.Components.RecyclerListView
+            public Integer getSelectorColor(int i2) {
+                return 0;
+            }
+        };
+        this.topListView = c68664;
+        c68664.setWillNotDraw(false);
+        LinearLayoutManager linearLayoutManager2 = new LinearLayoutManager(context2, 0, false);
+        this.topLayoutManager = linearLayoutManager2;
+        c68664.setLayoutManager(linearLayoutManager2);
+        UniversalAdapter universalAdapter = new UniversalAdapter(c68664, context2, i2, 0, new Utilities.Callback2() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda7
+            @Override // org.telegram.messenger.Utilities.Callback2
+            public final void run(Object obj, Object obj2) {
+                this.f$0.fillTopItems((ArrayList) obj, (UniversalAdapter) obj2);
+            }
+        }, null);
+        this.topAdapter = universalAdapter;
+        c68664.setAdapter(universalAdapter);
+        universalAdapter.setApplyBackground(false);
+        c68664.setPadding(AndroidUtilities.m1036dp(8.0f), 0, AndroidUtilities.m1036dp(8.0f), 0);
+        c68664.setClipToPadding(false);
+        addView(c68664, LayoutHelper.createFrame(-1, 26.0f, 87, 0.0f, 0.0f, 0.0f, 9.66f));
+        c68664.setOnItemClickListener(new RecyclerListView.OnItemClickListenerExtended() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda8
+            @Override // org.telegram.ui.Components.RecyclerListView.OnItemClickListenerExtended
+            public final void onItemClick(View view2, int i2, float f, float f2) {
+                this.f$0.lambda$new$7(view2, i2, f, f2);
+            }
+        });
+        C68675 c68675 = new DefaultItemAnimator() { // from class: org.telegram.ui.Stories.LiveCommentsView.5
+            @Override // androidx.recyclerview.widget.DefaultItemAnimator
+            public float animateByScale(View view2) {
+                return 0.5f;
+            }
+
+            public C68675() {
+            }
+        };
+        c68675.setSupportsChangeAnimations(false);
+        c68675.setDelayAnimations(false);
+        c68675.setInterpolator(cubicBezierInterpolator);
+        c68675.setDurations(350L);
+        c68664.setItemAnimator(c68675);
+        updateTopMessages(false);
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$1 */
+    public class C68631 extends RecyclerListView {
+        public C68631(Context context2) {
+            super(context2);
+        }
+
+        @Override // android.view.View
+        public void invalidate() {
+            super.invalidate();
+            LiveCommentsView.this.invalidate();
+        }
+
+        @Override // org.telegram.p035ui.Components.RecyclerListView
+        public Integer getSelectorColor(int i2) {
+            return 0;
+        }
+
+        @Override // org.telegram.p035ui.Components.RecyclerListView, android.view.ViewGroup, android.view.View
+        public boolean dispatchTouchEvent(MotionEvent motionEvent) {
+            if (LiveCommentsView.this.isCollapsed()) {
+                return false;
+            }
+            return super.dispatchTouchEvent(motionEvent);
+        }
+
+        public int getMaxVisibleId() {
+            if (LiveCommentsView.this.collapsed) {
+                return -1;
+            }
+            for (int i2 = 0; i2 < getChildCount(); i2++) {
+                View childAt = getChildAt(i2);
+                if (childAt instanceof LiveCommentView) {
+                    LiveCommentView liveCommentView = (LiveCommentView) childAt;
+                    if (liveCommentView.message != null) {
+                        return liveCommentView.message.f1789id;
+                    }
+                }
+            }
+            return -1;
+        }
+
+        @Override // org.telegram.p035ui.Components.RecyclerListView, android.view.ViewGroup, android.view.View
+        public void dispatchDraw(Canvas canvas) {
+            int maxVisibleId = getMaxVisibleId();
+            LiveCommentsView liveCommentsView = LiveCommentsView.this;
+            if (maxVisibleId > liveCommentsView.maxReadId) {
+                liveCommentsView.maxReadId = maxVisibleId;
+                liveCommentsView.onMessagesCountUpdated();
+            }
+            super.dispatchDraw(canvas);
+        }
+
+        @Override // org.telegram.p035ui.Components.RecyclerListView, androidx.recyclerview.widget.RecyclerView, android.view.View
+        public void onMeasure(int i2, int i3) {
+            int size = View.MeasureSpec.getSize(i2);
+            View.MeasureSpec.getSize(i3);
+            super.onMeasure(i2, View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.getMode(i3)));
+        }
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$2 */
+    public class C68642 extends UniversalAdapter {
+        public C68642(RecyclerListView c686312, Context context2, int i2, int i3, boolean z, Utilities.Callback2 callback2, Theme.ResourcesProvider resourcesProvider) {
+            super(c686312, context2, i2, i3, z, callback2, resourcesProvider);
+        }
+
+        @Override // org.telegram.p035ui.Components.UniversalAdapter, androidx.recyclerview.widget.RecyclerView.Adapter
+        public void onBindViewHolder(RecyclerView.ViewHolder viewHolder, int i2) {
+            super.onBindViewHolder(viewHolder, i2);
+            if (LiveCommentsView.this.callHighlight) {
+                View view2 = viewHolder.itemView;
+                if (view2 instanceof LiveCommentView) {
+                    LiveCommentView liveCommentView = (LiveCommentView) view2;
+                    if (liveCommentView.message == null || liveCommentView.message.f1789id != LiveCommentsView.this.highlightingMessageId) {
+                        return;
+                    }
+                    liveCommentView.highlight();
+                    LiveCommentsView.this.callHighlight = false;
+                }
+            }
+        }
+
+        @Override // org.telegram.p035ui.Components.UniversalAdapter, androidx.recyclerview.widget.RecyclerView.Adapter
+        public void onViewAttachedToWindow(RecyclerView.ViewHolder viewHolder) {
+            super.onViewAttachedToWindow(viewHolder);
+            if (LiveCommentsView.this.callHighlight) {
+                View view2 = viewHolder.itemView;
+                if (view2 instanceof LiveCommentView) {
+                    LiveCommentView liveCommentView = (LiveCommentView) view2;
+                    if (liveCommentView.message == null || liveCommentView.message.f1789id != LiveCommentsView.this.highlightingMessageId) {
+                        return;
+                    }
+                    liveCommentView.highlight();
+                    LiveCommentsView.this.callHighlight = false;
+                }
+            }
+        }
+    }
+
+    public /* synthetic */ void lambda$new$5(ViewGroup viewGroup, final StoryViewer storyViewer, View view, int i) {
+        final LiveCommentView liveCommentView = (LiveCommentView) view;
+        final Message message = liveCommentView.message;
+        ItemOptions itemOptionsMakeOptions = ItemOptions.makeOptions(viewGroup, new DarkThemeResourceProvider(), view);
+        boolean z = true;
+        itemOptionsMakeOptions.addText(LocaleController.formatString(C2797R.string.LiveStoryMessageSent, LocaleController.formatDateTime(message.date, true)), 15);
+        itemOptionsMakeOptions.addGap();
+        itemOptionsMakeOptions.add(C2797R.drawable.msg_openprofile, LocaleController.getString(C2797R.string.OpenProfile), new Runnable() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda13
+            @Override // java.lang.Runnable
+            public final void run() {
+                storyViewer.presentFragment(ProfileActivity.m1186of(message.dialogId));
+            }
+        });
+        itemOptionsMakeOptions.addIf(!message.isReaction, C2797R.drawable.msg_copy, LocaleController.getString(C2797R.string.Copy), new Runnable() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda14
+            @Override // java.lang.Runnable
+            public final void run() {
+                this.f$0.lambda$new$2(liveCommentView);
+            }
+        });
+        if (this.dialogId != UserConfig.getInstance(this.currentAccount).getClientUserId() && !isAdmin()) {
+            z = false;
+        }
+        itemOptionsMakeOptions.addIf(z, C2797R.drawable.msg_delete, LocaleController.getString(C2797R.string.Delete), new Runnable() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda15
+            @Override // java.lang.Runnable
+            public final void run() {
+                this.f$0.lambda$new$4(message);
+            }
+        });
+        itemOptionsMakeOptions.show();
+    }
+
+    public /* synthetic */ void lambda$new$2(LiveCommentView liveCommentView) {
+        AndroidUtilities.addToClipboard(liveCommentView.text);
+        if (AndroidUtilities.shouldShowClipboardToast()) {
+            Toast.makeText(getContext(), LocaleController.getString(C2797R.string.TextCopied), 0).show();
+        }
+    }
+
+    public /* synthetic */ void lambda$new$4(final Message message) {
+        if (isMe(message.dialogId)) {
+            TL_phone.deleteGroupCallMessages deletegroupcallmessages = new TL_phone.deleteGroupCallMessages();
+            deletegroupcallmessages.call = this.inputCall;
+            deletegroupcallmessages.messages.add(Integer.valueOf(message.f1789id));
+            ConnectionsManager.getInstance(this.currentAccount).sendRequest(deletegroupcallmessages, null);
+            delete(message.f1789id);
+            return;
+        }
+        openDeleteMessage(getContext(), message.dialogId, new Utilities.Callback3() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda20
+            @Override // org.telegram.messenger.Utilities.Callback3
+            public final void run(Object obj, Object obj2, Object obj3) {
+                this.f$0.lambda$new$3(message, (Boolean) obj, (Boolean) obj2, (Boolean) obj3);
+            }
+        });
+    }
+
+    public /* synthetic */ void lambda$new$3(Message message, Boolean bool, Boolean bool2, Boolean bool3) {
+        if (bool2.booleanValue()) {
+            TL_phone.deleteGroupCallParticipantMessages deletegroupcallparticipantmessages = new TL_phone.deleteGroupCallParticipantMessages();
+            deletegroupcallparticipantmessages.call = this.inputCall;
+            deletegroupcallparticipantmessages.participant = MessagesController.getInstance(this.currentAccount).getInputPeer(message.dialogId);
+            deletegroupcallparticipantmessages.report_spam = bool.booleanValue();
+            ConnectionsManager.getInstance(this.currentAccount).sendRequest(deletegroupcallparticipantmessages, null);
+            deleteAllFrom(message.dialogId);
+        } else {
+            TL_phone.deleteGroupCallMessages deletegroupcallmessages = new TL_phone.deleteGroupCallMessages();
+            deletegroupcallmessages.call = this.inputCall;
+            deletegroupcallmessages.messages.add(Integer.valueOf(message.f1789id));
+            ConnectionsManager.getInstance(this.currentAccount).sendRequest(deletegroupcallmessages, null);
+            delete(message.f1789id);
+        }
+        if (bool3.booleanValue()) {
+            long j = this.dialogId;
+            int i = this.currentAccount;
+            if (j >= 0) {
+                MessagesController.getInstance(i).blockPeer(this.dialogId);
+            } else {
+                MessagesController.getInstance(i).deleteParticipantFromChat(-this.dialogId, MessagesController.getInstance(this.currentAccount).getInputPeer(message.dialogId), false, true);
+            }
+        }
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$3 */
+    public class C68653 extends DefaultItemAnimator {
+        @Override // androidx.recyclerview.widget.DefaultItemAnimator
+        public float animateByScale(View view2) {
+            return 0.5f;
+        }
+
+        public C68653() {
+        }
+
+        @Override // androidx.recyclerview.widget.DefaultItemAnimator
+        public void onMoveAnimationUpdate(RecyclerView.ViewHolder viewHolder) {
+            super.onMoveAnimationUpdate(viewHolder);
+            LiveCommentsView.this.listView.invalidate();
+        }
+
+        @Override // androidx.recyclerview.widget.DefaultItemAnimator
+        public void onAddAnimationUpdate(RecyclerView.ViewHolder viewHolder) {
+            super.onAddAnimationUpdate(viewHolder);
+            LiveCommentsView.this.listView.invalidate();
+        }
+    }
+
+    public /* synthetic */ void lambda$new$6(View view) {
+        setCollapsed(!this.collapsed, true);
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$4 */
+    public class C68664 extends RecyclerListView {
+        public C68664(Context context2) {
+            super(context2);
+        }
+
+        @Override // org.telegram.p035ui.Components.RecyclerListView
+        public Integer getSelectorColor(int i2) {
+            return 0;
+        }
+    }
+
+    /* JADX WARN: Code restructure failed: missing block: B:103:0x0090, code lost:
+    
+        r11 = r1.f1789id;
+     */
+    /*
+        Code decompiled incorrectly, please refer to instructions dump.
+        To view partially-correct code enable 'Show inconsistent code' option in preferences
+    */
+    public /* synthetic */ void lambda$new$7(android.view.View r10, int r11, float r12, float r13) {
+        /*
+            Method dump skipped, instruction units count: 256
+            To view this dump change 'Code comments level' option to 'DEBUG'
+        */
+        throw new UnsupportedOperationException("Method not decompiled: org.telegram.p035ui.Stories.LiveCommentsView.lambda$new$7(android.view.View, int, float, float):void");
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$5 */
+    public class C68675 extends DefaultItemAnimator {
+        @Override // androidx.recyclerview.widget.DefaultItemAnimator
+        public float animateByScale(View view2) {
+            return 0.5f;
+        }
+
+        public C68675() {
+        }
+    }
+
+    public int getListViewContentTop() {
+        int height = this.listView.getHeight();
+        for (int i = 0; i < this.listView.getChildCount(); i++) {
+            height = Math.min(this.listView.getChildAt(i).getTop(), height);
+        }
+        return height;
+    }
+
+    public float top() {
+        return this.listView.getY() + Math.max(Math.max(0.0f, this.keyboardOffset - this.listView.getTop()), getListViewContentTop());
+    }
+
+    @Override // android.view.ViewGroup
+    public boolean onInterceptTouchEvent(MotionEvent motionEvent) {
+        if (motionEvent.getAction() != 0 || motionEvent.getY() >= top()) {
+            return super.onInterceptTouchEvent(motionEvent);
+        }
+        return false;
+    }
+
+    @Override // android.view.ViewGroup, android.view.View
+    public boolean dispatchTouchEvent(MotionEvent motionEvent) {
+        if (!this.allowTouches) {
+            return false;
+        }
+        if (motionEvent.getAction() != 0 || motionEvent.getY() >= top()) {
+            return super.dispatchTouchEvent(motionEvent);
+        }
+        return false;
+    }
+
+    @Override // android.view.View
+    public boolean onTouchEvent(MotionEvent motionEvent) {
+        if (motionEvent.getAction() != 0 || motionEvent.getY() >= top()) {
+            return super.onTouchEvent(motionEvent);
+        }
+        return false;
+    }
+
+    public void setAllowTouches(boolean z) {
+        this.allowTouches = z;
+    }
+
+    public void fillItems(ArrayList<UItem> arrayList, UniversalAdapter universalAdapter) {
+        LivePlayer livePlayer = this.livePlayer;
+        long sendPaidMessagesStars = livePlayer == null ? 0L : livePlayer.getSendPaidMessagesStars();
+        this.lastMinStars = sendPaidMessagesStars;
+        for (int i = 0; i < this.messages.size(); i++) {
+            Message message = this.messages.get(i);
+            if (message.fromAdmin || !message.isReaction || message.stars >= sendPaidMessagesStars) {
+                arrayList.add(LiveCommentView.Factory.m1207of(message));
+            }
+        }
+    }
+
+    public void fillTopItems(ArrayList<UItem> arrayList, UniversalAdapter universalAdapter) {
+        for (int i = 0; i < this.topMessages.size(); i++) {
+            arrayList.add(LiveTopSenderView.Factory.m1208of(this.topMessages.get(i)));
+        }
+    }
+
+    private int getListViewTop() {
+        int height = this.listView.getHeight();
+        int i = 0;
+        while (true) {
+            int childCount = this.listView.getChildCount();
+            RecyclerListView recyclerListView = this.listView;
+            if (i < childCount) {
+                height = Math.min(recyclerListView.getChildAt(i).getTop(), height);
+                i++;
+            } else {
+                return recyclerListView.getHeight() - height;
+            }
+        }
+    }
+
+    @Override // android.view.ViewGroup
+    public boolean drawChild(Canvas canvas, View view, long j) {
+        RecyclerListView recyclerListView = this.listView;
+        if (view != recyclerListView) {
+            return super.drawChild(canvas, view, j);
+        }
+        if (recyclerListView.getAlpha() <= 0.0f) {
+            return true;
+        }
+        float y = this.listView.getY() + Math.max(0.0f, this.keyboardOffset - this.listView.getTop());
+        canvas.saveLayerAlpha(this.listView.getX(), this.listView.getY(), this.listView.getX() + this.listView.getWidth(), this.listView.getY() + this.listView.getHeight(), 255, 31);
+        canvas.save();
+        canvas.translate(0.0f, (1.0f - this.listView.getAlpha()) * Math.min((this.listView.getY() + this.listView.getHeight()) - y, getListViewTop()));
+        canvas.clipRect(0.0f, y, getWidth(), getHeight());
+        boolean zDrawChild = super.drawChild(canvas, view, j);
+        canvas.restore();
+        RectF rectF = AndroidUtilities.rectTmp;
+        rectF.set(0.0f, y, getWidth(), AndroidUtilities.m1036dp(12.0f) + y);
+        this.gradientClip.draw(canvas, rectF, 1, 1.0f);
+        rectF.set(0.0f, (this.listView.getY() + this.listView.getHeight()) - AndroidUtilities.m1036dp(12.0f), getWidth(), this.listView.getBottom() + this.listView.getHeight());
+        this.gradientClip.draw(canvas, rectF, 3, 1.0f);
+        canvas.restore();
+        return zDrawChild;
+    }
+
+    private void updateTopMessages(boolean z) {
+        if (z && this.hasTopMessages == (!this.topMessages.isEmpty())) {
+            return;
+        }
+        boolean zIsEmpty = this.topMessages.isEmpty();
+        this.hasTopMessages = !zIsEmpty;
+        RecyclerListView recyclerListView = this.listView;
+        if (z) {
+            ViewPropertyAnimator viewPropertyAnimatorTranslationY = recyclerListView.animate().translationY(this.hasTopMessages ? 0.0f : AndroidUtilities.m1036dp(35.0f));
+            CubicBezierInterpolator cubicBezierInterpolator = CubicBezierInterpolator.EASE_OUT_QUINT;
+            viewPropertyAnimatorTranslationY.setInterpolator(cubicBezierInterpolator).setUpdateListener(new ValueAnimator.AnimatorUpdateListener() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda19
+                @Override // android.animation.ValueAnimator.AnimatorUpdateListener
+                public final void onAnimationUpdate(ValueAnimator valueAnimator) {
+                    this.f$0.lambda$updateTopMessages$8(valueAnimator);
+                }
+            }).setDuration(420L).start();
+            this.topListView.animate().translationY(this.hasTopMessages ? 0.0f : AndroidUtilities.m1036dp(35.0f)).alpha(this.hasTopMessages ? 1.0f : 0.0f).setInterpolator(cubicBezierInterpolator).setDuration(420L).start();
+            return;
+        }
+        recyclerListView.setTranslationY(!zIsEmpty ? 0.0f : AndroidUtilities.m1036dp(35.0f));
+        this.topListView.setTranslationY(this.hasTopMessages ? 0.0f : AndroidUtilities.m1036dp(35.0f));
+        this.topListView.setAlpha(this.hasTopMessages ? 1.0f : 0.0f);
+        invalidate();
+    }
+
+    public /* synthetic */ void lambda$updateTopMessages$8(ValueAnimator valueAnimator) {
+        invalidate();
+    }
+
+    public void setKeyboardOffset(float f, float f2, float f3) {
+        this.keyboardT = f;
+        this.keyboardOffset = f2;
+        if (Math.abs(this.keyboardFinalOffset - f3) > 0.1f) {
+            this.keyboardFinalOffset = f3;
+            this.listView.setPadding(AndroidUtilities.m1036dp(8.0f), AndroidUtilities.m1036dp(7.5f) + Math.max(0, ((int) f3) - this.listView.getTop()), AndroidUtilities.m1036dp(8.0f), AndroidUtilities.m1036dp(7.5f));
+            if (!this.listView.canScrollVertically(1)) {
+                this.layoutManager.scrollToPositionWithOffset(0, AndroidUtilities.m1036dp(100.0f));
+            }
+        }
+        setTranslationY(-this.keyboardOffset);
+        invalidate();
+    }
+
+    public void clear() {
+        this.messages.clear();
+        this.adapter.update(true);
+    }
+
+    public boolean setup(long j, TLRPC.InputGroupCall inputGroupCall) {
+        boolean z;
+        TLRPC.InputGroupCall inputGroupCall2 = this.inputCall;
+        if ((inputGroupCall2 == null ? 0L : inputGroupCall2.f1267id) != (inputGroupCall != null ? inputGroupCall.f1267id : 0L)) {
+            clear();
+            z = true;
+        } else {
+            z = false;
+        }
+        this.dialogId = j;
+        this.inputCall = inputGroupCall;
+        if (z) {
+            this.closeBulletin.run();
+            Runnable runnable = this.pollStarsRunnable;
+            if (inputGroupCall == null) {
+                AndroidUtilities.cancelRunOnUIThread(runnable);
+                return z;
+            }
+            runnable.run();
+        }
+        return z;
+    }
+
+    public void saveHistory() {
+        LivePlayer livePlayer = this.livePlayer;
+        if (livePlayer != null) {
+            livePlayer.messages = this.messages;
+            livePlayer.topMessages = this.topMessages;
+        }
+    }
+
+    public void setLivePlayer(LivePlayer livePlayer) {
+        ArrayList<Message> arrayList;
+        ArrayList<TopSender> arrayList2;
+        ArrayList<Message> arrayList3;
+        boolean z = this.livePlayer == null;
+        this.livePlayer = livePlayer;
+        if (!z || livePlayer == null || (arrayList = livePlayer.messages) == null || (arrayList2 = livePlayer.topMessages) == null || arrayList == (arrayList3 = this.messages) || arrayList2 == this.topMessages || !arrayList3.isEmpty() || !this.topMessages.isEmpty()) {
+            return;
+        }
+        this.messages.addAll(livePlayer.messages);
+        this.topMessages.addAll(livePlayer.topMessages);
+        this.adapter.update(true);
+        this.lastNow = ConnectionsManager.getInstance(this.currentAccount).getCurrentTime();
+        Collections.sort(this.topMessages, new LiveCommentsView$$ExternalSyntheticLambda0(this));
+        this.topAdapter.update(true);
+        updateTopMessages(false);
+    }
+
+    @Override // android.view.ViewGroup, android.view.View
+    public void onAttachedToWindow() {
+        NotificationCenter.getInstance(this.currentAccount).addObserver(this, NotificationCenter.liveStoryMessageUpdate);
+        setAllowTouches(true);
+        super.onAttachedToWindow();
+        if (this.inputCall != null) {
+            AndroidUtilities.cancelRunOnUIThread(this.pollStarsRunnable);
+            AndroidUtilities.runOnUIThread(this.pollStarsRunnable);
+        }
+    }
+
+    @Override // android.view.ViewGroup, android.view.View
+    public void onDetachedFromWindow() {
+        NotificationCenter.getInstance(this.currentAccount).removeObserver(this, NotificationCenter.liveStoryMessageUpdate);
+        super.onDetachedFromWindow();
+        if (this.inputCall != null) {
+            AndroidUtilities.cancelRunOnUIThread(this.pollStarsRunnable);
+        }
+    }
+
+    /* JADX INFO: renamed from: pollStars */
+    public void lambda$new$9() {
+        if (this.inputCall == null || this.polling) {
+            return;
+        }
+        AndroidUtilities.cancelRunOnUIThread(this.pollStarsRunnable);
+        this.polling = true;
+        final TL_phone.getGroupCallStars getgroupcallstars = new TL_phone.getGroupCallStars();
+        getgroupcallstars.call = this.inputCall;
+        ConnectionsManager.getInstance(this.currentAccount).sendRequestTyped(getgroupcallstars, new AiTonesController$$ExternalSyntheticLambda0(), new Utilities.Callback2() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda9
+            @Override // org.telegram.messenger.Utilities.Callback2
+            public final void run(Object obj, Object obj2) {
+                this.f$0.lambda$pollStars$10(getgroupcallstars, (TL_phone.groupCallStars) obj, (TLRPC.TL_error) obj2);
+            }
+        });
+    }
+
+    public /* synthetic */ void lambda$pollStars$10(TL_phone.getGroupCallStars getgroupcallstars, TL_phone.groupCallStars groupcallstars, TLRPC.TL_error tL_error) {
+        boolean z;
+        this.polling = false;
+        TLRPC.InputGroupCall inputGroupCall = this.inputCall;
+        if (inputGroupCall == null || inputGroupCall.f1267id != getgroupcallstars.call.f1267id) {
+            return;
+        }
+        if (groupcallstars != null) {
+            MessagesController.getInstance(this.currentAccount).putUsers(groupcallstars.users, false);
+            MessagesController.getInstance(this.currentAccount).putChats(groupcallstars.chats, false);
+            int i = 0;
+            while (true) {
+                if (i >= groupcallstars.top_donors.size()) {
+                    break;
+                }
+                if (!groupcallstars.top_donors.get(i).f1442my) {
+                    i++;
+                } else if (groupcallstars.top_donors.get(i).stars > 0) {
+                    z = true;
+                }
+            }
+            z = false;
+            long j = groupcallstars.total_stars;
+            boolean z2 = (j == this.totalStars && this.sentStars == z) ? false : true;
+            this.totalStars = j;
+            this.topDonors = groupcallstars.top_donors;
+            this.sentStars = z;
+            if (z2) {
+                onStarsCountUpdated();
+            }
+            updateMessagesPlaces();
+        }
+        if (isAttachedToWindow()) {
+            AndroidUtilities.cancelRunOnUIThread(this.pollStarsRunnable);
+            AndroidUtilities.runOnUIThread(this.pollStarsRunnable, 5000L);
+        }
+    }
+
+    public LiveCommentView findComment(int i) {
+        for (int i2 = 0; i2 < this.listView.getChildCount(); i2++) {
+            View childAt = this.listView.getChildAt(i2);
+            if (childAt instanceof LiveCommentView) {
+                LiveCommentView liveCommentView = (LiveCommentView) childAt;
+                if (liveCommentView.message != null && liveCommentView.message.f1789id == i) {
+                    return liveCommentView;
+                }
+            }
+        }
+        return null;
+    }
+
+    public void sendStars(long j, boolean z) {
+        Bulletin bulletin = this.starsBulletin;
+        if (bulletin == null || !bulletin.isShowing()) {
+            DarkThemeResourceProvider darkThemeResourceProvider = new DarkThemeResourceProvider();
+            Bulletin.TwoLineAnimatedLottieLayout twoLineAnimatedLottieLayout = new Bulletin.TwoLineAnimatedLottieLayout(getContext(), darkThemeResourceProvider);
+            this.bulletinLayout = twoLineAnimatedLottieLayout;
+            twoLineAnimatedLottieLayout.setAnimation(C2797R.raw.stars_topup, new String[0]);
+            this.bulletinLayout.titleTextView.setText(getStarsToastTitle());
+            Bulletin.UndoButton undoButton = new Bulletin.UndoButton(getContext(), true, false, darkThemeResourceProvider);
+            this.bulletinButton = undoButton;
+            undoButton.setText(LocaleController.getString(C2797R.string.StarsSentUndo));
+            this.bulletinButton.setUndoAction(new Runnable() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda12
+                @Override // java.lang.Runnable
+                public final void run() {
+                    this.f$0.cancelStars();
+                }
+            });
+            Bulletin.TimerView timerView = new Bulletin.TimerView(getContext(), darkThemeResourceProvider);
+            this.timerView = timerView;
+            timerView.timeLeft = 5000L;
+            timerView.setColor(Theme.getColor(Theme.key_undo_cancelColor, darkThemeResourceProvider));
+            this.bulletinButton.addView(this.timerView, LayoutHelper.createFrame(20, 20.0f, 21, 0.0f, 0.0f, 12.0f, 0.0f));
+            this.bulletinButton.undoTextView.setPadding(AndroidUtilities.m1036dp(12.0f), AndroidUtilities.m1036dp(8.0f), AndroidUtilities.m1036dp(30.0f), AndroidUtilities.m1036dp(8.0f));
+            this.bulletinLayout.setButton(this.bulletinButton);
+            Bulletin bulletinCreate = BulletinFactory.m1142of(this.topBulletinContainer, darkThemeResourceProvider).create(this.bulletinLayout, -1);
+            this.starsBulletin = bulletinCreate;
+            bulletinCreate.hideAfterBottomSheet = false;
+            bulletinCreate.show(true);
+            this.starsBulletin.setOnHideListener(this.closeBulletin);
+        }
+        this.localStars += j;
+        onCancelledStarReaction(getDefaultPeerId());
+        onStarReaction(getDefaultPeerId(), getTotalMyStars(), (int) this.localStars);
+        this.bulletinLayout.titleTextView.setText(getStarsToastTitle());
+        this.bulletinLayout.subtitleTextView.setText(getStarsToastSubtitle());
+        this.timerView.timeLeft = 5000L;
+        AndroidUtilities.cancelRunOnUIThread(this.closeBulletin);
+        AndroidUtilities.runOnUIThread(this.closeBulletin, 5000L);
+        onStarsButtonPressed(this.localStars, z);
+        onStarsCountUpdated();
+    }
+
+    private int getTotalMyStars() {
+        int i = (int) this.localStars;
+        for (int i2 = 0; i2 < this.topDonors.size(); i2++) {
+            if (this.topDonors.get(i2).f1442my) {
+                i = (int) (((long) i) + this.topDonors.get(i2).stars);
+            }
+        }
+        return i;
+    }
+
+    public void openStarsSheet(boolean z) {
+        this.closeBulletin.run();
+        ArrayList arrayList = new ArrayList();
+        if (this.topDonors != null) {
+            for (int i = 0; i < this.topDonors.size(); i++) {
+                TL_phone.groupCallDonor groupcalldonor = this.topDonors.get(i);
+                TLRPC.TL_messageReactor tL_messageReactor = new TLRPC.TL_messageReactor();
+                tL_messageReactor.anonymous = groupcalldonor.anonymous;
+                tL_messageReactor.f1273my = groupcalldonor.f1442my;
+                tL_messageReactor.count = (int) groupcalldonor.stars;
+                tL_messageReactor.peer_id = groupcalldonor.peer_id;
+                arrayList.add(tL_messageReactor);
+            }
+        }
+        long clientUserId = UserConfig.getInstance(this.currentAccount).getClientUserId();
+        TLRPC.Peer defaultSendAs = getDefaultSendAs();
+        if (defaultSendAs != null) {
+            clientUserId = DialogObject.getPeerDialogId(defaultSendAs);
+        }
+        StarsReactionsSheet starsReactionsSheet = new StarsReactionsSheet(getContext(), this.currentAccount, this.dialogId, null, null, arrayList, !z, true, clientUserId, new DarkThemeResourceProvider() { // from class: org.telegram.ui.Stories.LiveCommentsView.6
+            public C68686() {
+            }
+
+            @Override // org.telegram.p035ui.Stories.DarkThemeResourceProvider
+            public void appendColors() {
+                this.sparseIntArray.put(Theme.key_divider, 352321535);
+            }
+        });
+        starsReactionsSheet.setLiveCommentsView(this);
+        starsReactionsSheet.setOnSend(new Utilities.Callback2Return() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda10
+            @Override // org.telegram.messenger.Utilities.Callback2Return
+            public final Object run(Object obj, Object obj2) {
+                return this.f$0.lambda$openStarsSheet$11((Long) obj, (Long) obj2);
+            }
+        });
+        starsReactionsSheet.show();
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$6 */
+    public class C68686 extends DarkThemeResourceProvider {
+        public C68686() {
+        }
+
+        @Override // org.telegram.p035ui.Stories.DarkThemeResourceProvider
+        public void appendColors() {
+            this.sparseIntArray.put(Theme.key_divider, 352321535);
+        }
+    }
+
+    public /* synthetic */ Integer lambda$openStarsSheet$11(Long l, Long l2) {
+        this.closeBulletin.run();
+        this.localStars = l2.longValue();
+        Bulletin bulletinCreateSimpleBulletin = BulletinFactory.m1142of(this.topBulletinContainer, new DarkThemeResourceProvider()).createSimpleBulletin(C2797R.raw.stars_topup, getStarsToastTitle(), getStarsToastSubtitle());
+        boolean z = false;
+        bulletinCreateSimpleBulletin.hideAfterBottomSheet = false;
+        bulletinCreateSimpleBulletin.show(true);
+        this.localStars = 0L;
+        this.sentStars = true;
+        int iSend = send(new TLRPC.TL_textWithEntities(), l2.longValue());
+        LivePlayer livePlayer = this.livePlayer;
+        long sendPaidMessagesStars = livePlayer != null ? livePlayer.getSendPaidMessagesStars() : 0L;
+        if (getDefaultPeerId() == this.dialogId && isAdmin()) {
+            z = true;
+        }
+        if (l2.longValue() < sendPaidMessagesStars && !z) {
+            return Integer.MIN_VALUE;
+        }
+        return Integer.valueOf(iSend);
+    }
+
+    public /* synthetic */ void lambda$new$12() {
+        AndroidUtilities.cancelRunOnUIThread(this.closeBulletin);
+        Bulletin bulletin = this.starsBulletin;
+        if (bulletin != null) {
+            bulletin.hide();
+            this.starsBulletin = null;
+        }
+        long j = this.localStars;
+        if (j > 0) {
+            this.localStars = 0L;
+            this.sentStars = true;
+            send(new TLRPC.TL_textWithEntities(), j);
+            return;
+        }
+        onStarsCountUpdated();
+    }
+
+    public void cancelStars() {
+        this.localStars = 0L;
+        onCancelledStarReaction(getDefaultPeerId());
+        onStarsButtonCancelled();
+        onStarsCountUpdated();
+    }
+
+    private String getStarsToastTitle() {
+        return LocaleController.getString(C2797R.string.StarsSentTitle);
+    }
+
+    private CharSequence getStarsToastSubtitle() {
+        return AndroidUtilities.replaceTags(LocaleController.formatPluralStringComma("PaidMessageSentSubtitle", Math.max(0, (int) this.localStars)));
+    }
+
+    public boolean isCollapsed() {
+        return this.collapsed;
+    }
+
+    public void setCollapsed(boolean z, boolean z2) {
+        if (z2 && this.collapsed == z) {
+            return;
+        }
+        this.collapsed = z;
+        ValueAnimator valueAnimator = this.collapseAnimator;
+        if (valueAnimator != null) {
+            valueAnimator.cancel();
+            this.collapseAnimator = null;
+        }
+        this.listView.invalidate();
+        if (z2) {
+            ValueAnimator valueAnimatorOfFloat = ValueAnimator.ofFloat(this.listView.getAlpha(), z ? 0.0f : 1.0f);
+            this.collapseAnimator = valueAnimatorOfFloat;
+            valueAnimatorOfFloat.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda16
+                @Override // android.animation.ValueAnimator.AnimatorUpdateListener
+                public final void onAnimationUpdate(ValueAnimator valueAnimator2) {
+                    this.f$0.lambda$setCollapsed$13(valueAnimator2);
+                }
+            });
+            this.collapseAnimator.addListener(new AnimatorListenerAdapter() { // from class: org.telegram.ui.Stories.LiveCommentsView.7
+                final /* synthetic */ boolean val$collapsed;
+
+                public C68697(boolean z3) {
+                    z = z3;
+                }
+
+                @Override // android.animation.AnimatorListenerAdapter, android.animation.Animator.AnimatorListener
+                public void onAnimationEnd(Animator animator) {
+                    LiveCommentsView.this.listView.setAlpha(z ? 0.0f : 1.0f);
+                    LiveCommentsView.this.shadowView.setAlpha(z ? 0.0f : 0.5f);
+                    LiveCommentsView.this.invalidate();
+                }
+            });
+            this.collapseAnimator.setDuration(420L);
+            this.collapseAnimator.setInterpolator(CubicBezierInterpolator.EASE_OUT_QUINT);
+            this.collapseAnimator.start();
+        } else {
+            this.shadowView.setAlpha(z3 ? 0.0f : 0.5f);
+            this.listView.setAlpha(z3 ? 0.0f : 1.0f);
+        }
+        invalidate();
+    }
+
+    public /* synthetic */ void lambda$setCollapsed$13(ValueAnimator valueAnimator) {
+        float fFloatValue = ((Float) valueAnimator.getAnimatedValue()).floatValue();
+        this.listView.setAlpha(fFloatValue);
+        this.shadowView.setAlpha(AndroidUtilities.lerp(0.0f, 0.5f, fFloatValue));
+        invalidate();
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$7 */
+    public class C68697 extends AnimatorListenerAdapter {
+        final /* synthetic */ boolean val$collapsed;
+
+        public C68697(boolean z3) {
+            z = z3;
+        }
+
+        @Override // android.animation.AnimatorListenerAdapter, android.animation.Animator.AnimatorListener
+        public void onAnimationEnd(Animator animator) {
+            LiveCommentsView.this.listView.setAlpha(z ? 0.0f : 1.0f);
+            LiveCommentsView.this.shadowView.setAlpha(z ? 0.0f : 0.5f);
+            LiveCommentsView.this.invalidate();
+        }
+    }
+
+    @Override // org.telegram.messenger.NotificationCenter.NotificationCenterDelegate
+    public void didReceivedNotification(int i, int i2, Object... objArr) {
+        if (i == NotificationCenter.liveStoryMessageUpdate) {
+            int i3 = 0;
+            long jLongValue = ((Long) objArr[0]).longValue();
+            TLObject tLObject = (TLObject) objArr[1];
+            boolean zBooleanValue = ((Boolean) objArr[2]).booleanValue();
+            if (tLObject instanceof TL_update.TL_updateGroupCallMessage) {
+                TL_update.TL_updateGroupCallMessage tL_updateGroupCallMessage = (TL_update.TL_updateGroupCallMessage) tLObject;
+                TLRPC.InputGroupCall inputGroupCall = this.inputCall;
+                if (inputGroupCall == null || inputGroupCall.f1267id != jLongValue) {
+                    return;
+                }
+                TLRPC.GroupCallMessage groupCallMessage = tL_updateGroupCallMessage.message;
+                int i4 = groupCallMessage.date;
+                int i5 = groupCallMessage.f1261id;
+                boolean z = groupCallMessage.from_admin;
+                long peerDialogId = DialogObject.getPeerDialogId(groupCallMessage.from_id);
+                TLRPC.GroupCallMessage groupCallMessage2 = tL_updateGroupCallMessage.message;
+                push(i4, i5, z, peerDialogId, groupCallMessage2.message, groupCallMessage2.paid_message_stars, zBooleanValue);
+                return;
+            }
+            if (tLObject instanceof TL_update.TL_updateDeleteGroupCallMessages) {
+                TL_update.TL_updateDeleteGroupCallMessages tL_updateDeleteGroupCallMessages = (TL_update.TL_updateDeleteGroupCallMessages) tLObject;
+                TLRPC.InputGroupCall inputGroupCall2 = this.inputCall;
+                if (inputGroupCall2 == null || inputGroupCall2.f1267id != jLongValue) {
+                    return;
+                }
+                ArrayList<Integer> arrayList = tL_updateDeleteGroupCallMessages.messages;
+                int size = arrayList.size();
+                while (i3 < size) {
+                    Integer num = arrayList.get(i3);
+                    i3++;
+                    delete(num.intValue());
+                }
+            }
+        }
+    }
+
+    public void delete(int i) {
+        Message message;
+        boolean z = false;
+        int i2 = 0;
+        while (true) {
+            if (i2 >= this.messages.size()) {
+                i2 = -1;
+                message = null;
+                break;
+            } else {
+                if (this.messages.get(i2).f1789id == i) {
+                    message = this.messages.get(i2);
+                    break;
+                }
+                i2++;
+            }
+        }
+        if (message == null) {
+            return;
+        }
+        if (message.f1789id < 0 && message.isReaction) {
+            long j = message.stars;
+            if (j > 0) {
+                this.totalStars -= j;
+                onStarsCountUpdated();
+            }
+        }
+        int i3 = 0;
+        while (true) {
+            if (i3 >= this.topMessages.size()) {
+                break;
+            }
+            if (this.topMessages.get(i3).messages.contains(message)) {
+                this.topMessages.get(i3).messages.remove(message);
+                boolean zIsEmpty = this.topMessages.get(i3).messages.isEmpty();
+                ArrayList<TopSender> arrayList = this.topMessages;
+                if (zIsEmpty) {
+                    arrayList.remove(i3);
+                    z = true;
+                } else {
+                    arrayList.get(i3).updateLastSentDate();
+                    scheduleRemovingTopSenders();
+                }
+            } else {
+                i3++;
+            }
+        }
+        this.messages.remove(i2);
+        this.adapter.update(true);
+        if (z) {
+            this.lastNow = ConnectionsManager.getInstance(this.currentAccount).getCurrentTime();
+            Collections.sort(this.topMessages, new LiveCommentsView$$ExternalSyntheticLambda0(this));
+            this.topAdapter.update(true);
+            updateMessagesPlaces();
+            updateTopMessages(true);
+        }
+    }
+
+    public int sortTopMessages(TopSender topSender, TopSender topSender2) {
+        return topSender2.lastSentDate - topSender.lastSentDate;
+    }
+
+    public void deleteAllFrom(long j) {
+        int i = 0;
+        boolean z = false;
+        while (i < this.messages.size()) {
+            if (this.messages.get(i).dialogId == j) {
+                Message message = this.messages.get(i);
+                int i2 = 0;
+                while (true) {
+                    if (i2 >= this.topMessages.size()) {
+                        break;
+                    }
+                    if (this.topMessages.get(i2).messages.contains(message)) {
+                        this.topMessages.get(i2).messages.remove(message);
+                        if (this.topMessages.get(i2).messages.isEmpty()) {
+                            this.topMessages.remove(i2);
+                            z = true;
+                        } else {
+                            scheduleRemovingTopSenders();
+                        }
+                    } else {
+                        i2++;
+                    }
+                }
+                this.messages.remove(i);
+                this.adapter.update(true);
+                i--;
+            }
+            i++;
+        }
+        if (z) {
+            this.lastNow = ConnectionsManager.getInstance(this.currentAccount).getCurrentTime();
+            Collections.sort(this.topMessages, new LiveCommentsView$$ExternalSyntheticLambda0(this));
+            this.topAdapter.update(true);
+            updateMessagesPlaces();
+        }
+    }
+
+    public boolean isAdmin() {
+        TLRPC.InputGroupCall inputGroupCall;
+        if (getDefaultPeerId() < 0 && getDefaultPeerId() != this.dialogId) {
+            return false;
+        }
+        long j = this.dialogId;
+        if (j >= 0) {
+            return j == UserConfig.getInstance(this.currentAccount).getClientUserId();
+        }
+        LivePlayer livePlayer = this.livePlayer;
+        if (livePlayer == null || (inputGroupCall = this.inputCall) == null || inputGroupCall.f1267id != livePlayer.getCallId() || !this.livePlayer.isCreator()) {
+            return ChatObject.canManageCalls(MessagesController.getInstance(this.currentAccount).getChat(Long.valueOf(-this.dialogId)));
+        }
+        return true;
+    }
+
+    private long getDefaultPeerId() {
+        TLRPC.Peer defaultSendAs = getDefaultSendAs();
+        LivePlayer livePlayer = this.livePlayer;
+        if (livePlayer != null && livePlayer.isAdmin() && this.livePlayer.sendAsDisabled()) {
+            return this.dialogId;
+        }
+        return defaultSendAs == null ? UserConfig.getInstance(this.currentAccount).getClientUserId() : DialogObject.getPeerDialogId(defaultSendAs);
+    }
+
+    public int send(TLRPC.TL_textWithEntities tL_textWithEntities, long j) {
+        return lambda$send$14(getDefaultPeerId(), tL_textWithEntities, j);
+    }
+
+    /* JADX INFO: renamed from: send */
+    public int lambda$send$14(final long j, final TLRPC.TL_textWithEntities tL_textWithEntities, final long j2) {
+        int i;
+        boolean z;
+        TL_phone.groupCallDonor groupcalldonor;
+        final int newMessageId = UserConfig.getInstance(this.currentAccount).getNewMessageId();
+        final TL_phone.sendGroupCallMessage sendgroupcallmessage = new TL_phone.sendGroupCallMessage();
+        sendgroupcallmessage.call = this.inputCall;
+        sendgroupcallmessage.message = tL_textWithEntities;
+        if (j2 > 0) {
+            sendgroupcallmessage.flags |= 1;
+            sendgroupcallmessage.allow_paid_stars = j2;
+        }
+        sendgroupcallmessage.random_id = Utilities.random.nextLong();
+        sendgroupcallmessage.flags |= 2;
+        sendgroupcallmessage.send_as = MessagesController.getInstance(this.currentAccount).getInputPeer(j);
+        ConnectionsManager.getInstance(UserConfig.selectedAccount).sendRequest(sendgroupcallmessage, new RequestDelegate() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda18
+            @Override // org.telegram.tgnet.RequestDelegate
+            public final void run(TLObject tLObject, TLRPC.TL_error tL_error) {
+                this.f$0.lambda$send$16(sendgroupcallmessage, newMessageId, j2, j, tL_textWithEntities, tLObject, tL_error);
+            }
+        });
+        if (this.topDonors != null && j2 > 0) {
+            int i2 = 0;
+            while (true) {
+                if (i2 >= this.topDonors.size()) {
+                    groupcalldonor = null;
+                    break;
+                }
+                if (this.topDonors.get(i2).f1442my) {
+                    groupcalldonor = this.topDonors.get(i2);
+                    break;
+                }
+                i2++;
+            }
+            if (groupcalldonor != null) {
+                groupcalldonor.stars += j2;
+            } else {
+                TL_phone.groupCallDonor groupcalldonor2 = new TL_phone.groupCallDonor();
+                groupcalldonor2.f1442my = true;
+                groupcalldonor2.anonymous = false;
+                groupcalldonor2.peer_id = MessagesController.getInstance(this.currentAccount).getPeer(j);
+                groupcalldonor2.stars = j2;
+                this.topDonors.add(groupcalldonor2);
+            }
+        }
+        int currentTime = ConnectionsManager.getInstance(UserConfig.selectedAccount).getCurrentTime();
+        if (j == this.dialogId || isAdmin()) {
+            i = newMessageId;
+            z = true;
+        } else {
+            i = newMessageId;
+            z = false;
+        }
+        push(currentTime, i, z, j, tL_textWithEntities, j2, false);
+        int i3 = i;
+        setCollapsed(false, true);
+        return i3;
+    }
+
+    public /* synthetic */ void lambda$send$16(TL_phone.sendGroupCallMessage sendgroupcallmessage, final int i, final long j, final long j2, final TLRPC.TL_textWithEntities tL_textWithEntities, TLObject tLObject, final TLRPC.TL_error tL_error) {
+        if (!(tLObject instanceof TLRPC.Updates)) {
+            if (tL_error != null) {
+                AndroidUtilities.runOnUIThread(new Runnable() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda21
+                    @Override // java.lang.Runnable
+                    public final void run() {
+                        this.f$0.lambda$send$15(i, tL_error, j, j2, tL_textWithEntities);
+                    }
+                });
+                return;
+            }
+            return;
+        }
+        TLRPC.Updates updates = (TLRPC.Updates) tLObject;
+        ArrayList arrayListFindUpdatesAndRemove = MessagesController.findUpdatesAndRemove(updates, TL_update.TL_updateMessageID.class);
+        int size = arrayListFindUpdatesAndRemove.size();
+        int i2 = 0;
+        while (i2 < size) {
+            Object obj = arrayListFindUpdatesAndRemove.get(i2);
+            i2++;
+            TL_update.TL_updateMessageID tL_updateMessageID = (TL_update.TL_updateMessageID) obj;
+            if (sendgroupcallmessage.random_id == tL_updateMessageID.random_id) {
+                updateMessageId(i, tL_updateMessageID.f1472id);
+            }
+        }
+        MessagesController.getInstance(this.currentAccount).processUpdates(updates, false);
+    }
+
+    public /* synthetic */ void lambda$send$15(int i, TLRPC.TL_error tL_error, final long j, final long j2, final TLRPC.TL_textWithEntities tL_textWithEntities) {
+        delete(i);
+        if ("BALANCE_TOO_LOW".equalsIgnoreCase(tL_error.text)) {
+            new StarsIntroActivity.StarsNeededSheet(getContext(), new DarkThemeResourceProvider(), j, 17, _UrlKt.FRAGMENT_ENCODE_SET, new Runnable() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda22
+                @Override // java.lang.Runnable
+                public final void run() {
+                    this.f$0.lambda$send$14(j2, tL_textWithEntities, j);
+                }
+            }, this.dialogId).show();
+            return;
+        }
+        if ("GROUPCALL_INVALID".equalsIgnoreCase(tL_error.text)) {
+            LivePlayer livePlayer = this.livePlayer;
+            if (livePlayer != null) {
+                livePlayer.storyDeleted();
+                return;
+            }
+            return;
+        }
+        BulletinFactory.m1142of(this.topBulletinContainer, new DarkThemeResourceProvider()).showForError(tL_error, true);
+    }
+
+    private void updateMessageId(int i, int i2) {
+        ArrayList<Message> arrayList = this.messages;
+        int size = arrayList.size();
+        int i3 = 0;
+        while (i3 < size) {
+            Message message = arrayList.get(i3);
+            i3++;
+            Message message2 = message;
+            if (message2.f1789id == i) {
+                message2.f1789id = i2;
+                return;
+            }
+        }
+    }
+
+    public int getMessagesCount() {
+        return this.messages.size();
+    }
+
+    public int getUnreadMessagesCount() {
+        if (this.maxReadId < 0) {
+            return 0;
+        }
+        LivePlayer livePlayer = this.livePlayer;
+        long sendPaidMessagesStars = livePlayer == null ? 0L : livePlayer.getSendPaidMessagesStars();
+        int i = 0;
+        for (int i2 = 0; i2 < this.messages.size(); i2++) {
+            Message message = this.messages.get(i2);
+            int i3 = message.f1789id;
+            if (i3 >= 0 && i3 > this.maxReadId && (message.fromAdmin || !message.isReaction || message.stars >= sendPaidMessagesStars)) {
+                i++;
+            }
+        }
+        return i;
+    }
+
+    public void updatedMinStars() {
+        LivePlayer livePlayer = this.livePlayer;
+        if (this.lastMinStars != (livePlayer == null ? 0L : livePlayer.getSendPaidMessagesStars())) {
+            this.adapter.update(true);
+        }
+    }
+
+    public long getStarsCount() {
+        return this.totalStars + this.localStars;
+    }
+
+    public boolean areSendingStars() {
+        return this.starsBulletin != null;
+    }
+
+    public void push(int i, int i2, boolean z, long j, TLRPC.TL_textWithEntities tL_textWithEntities, long j2, boolean z2) {
+        int i3;
+        TopSender topSender;
+        boolean z3;
+        for (int i4 = 0; i4 < this.messages.size(); i4++) {
+            if (this.messages.get(i4).f1789id == i2) {
+                return;
+            }
+        }
+        int currentTime = ConnectionsManager.getInstance(this.currentAccount).getCurrentTime();
+        Message message = new Message();
+        message.date = i;
+        message.fromAdmin = z;
+        message.dialogId = j;
+        message.text = tL_textWithEntities;
+        message.stars = j2;
+        message.f1789id = i2;
+        message.isReaction = TextUtils.isEmpty(tL_textWithEntities.text);
+        int tierOption = HighlightMessageSheet.getTierOption(this.currentAccount, (int) message.stars, HighlightMessageSheet.TIER_PERIOD);
+        TL_phone.groupCallDonor groupcalldonor = null;
+        if (message.stars > 0 && tierOption > 0 && currentTime - message.date <= tierOption) {
+            int i5 = 0;
+            while (true) {
+                if (i5 >= this.topMessages.size()) {
+                    topSender = null;
+                    break;
+                } else {
+                    if (this.topMessages.get(i5).dialogId == j) {
+                        topSender = this.topMessages.get(i5);
+                        break;
+                    }
+                    i5++;
+                }
+            }
+            if (topSender == null) {
+                topSender = new TopSender();
+                topSender.currentAccount = this.currentAccount;
+                topSender.dialogId = j;
+                topSender.messages.add(message);
+                this.topMessages.add(0, topSender);
+                z3 = true;
+            } else {
+                topSender.messages.add(message);
+                this.topListView.invalidateViews();
+                z3 = false;
+            }
+            topSender.updateLastSentDate();
+            updateTopMessages(true);
+            scheduleRemovingTopSenders();
+            this.lastNow = currentTime;
+            Collections.sort(this.topMessages, new LiveCommentsView$$ExternalSyntheticLambda0(this));
+            if (!z2) {
+                this.topAdapter.update(true);
+            }
+            if (z3) {
+                this.topLayoutManager.scrollToPosition(0);
+            }
+        }
+        if (!z2 && message.isReaction) {
+            long j3 = message.stars;
+            if (j3 > 0) {
+                this.totalStars += j3;
+                onStarsCountUpdated();
+            }
+        }
+        if (message.f1789id >= 0) {
+            for (int size = this.messages.size() - 1; size >= 0; size--) {
+                if (message.f1789id < this.messages.get(size).f1789id) {
+                    i3 = size + 1;
+                    break;
+                }
+            }
+            i3 = 0;
+        } else {
+            i3 = 0;
+        }
+        this.messages.add(i3, message);
+        if (!z2) {
+            if (this.messages.size() > 2000) {
+                ArrayList<Message> arrayList = this.messages;
+                arrayList.subList(2000, arrayList.size()).clear();
+            }
+            this.adapter.update(true);
+        }
+        if (i3 <= 0 && !z2 && (!this.listView.canScrollVertically(1) || message.f1789id < 0)) {
+            this.layoutManager.scrollToPositionWithOffset(0, AndroidUtilities.m1036dp(100.0f));
+            int i6 = message.f1789id;
+            if (i6 > 0) {
+                this.maxReadId = i6;
+            }
+        }
+        invalidate();
+        onMessagesCountUpdated();
+        if (!z2 && i2 > 0 && message.stars > 0) {
+            int i7 = 0;
+            while (true) {
+                if (i7 >= this.topDonors.size()) {
+                    break;
+                }
+                if (DialogObject.getPeerDialogId(this.topDonors.get(i7).peer_id) == message.dialogId) {
+                    groupcalldonor = this.topDonors.get(i7);
+                    break;
+                }
+                i7++;
+            }
+            if (groupcalldonor == null) {
+                groupcalldonor = new TL_phone.groupCallDonor();
+                groupcalldonor.f1442my = UserConfig.getInstance(this.currentAccount).getClientUserId() == message.dialogId;
+                groupcalldonor.peer_id = MessagesController.getInstance(this.currentAccount).getPeer(message.dialogId);
+                groupcalldonor.stars = 0L;
+                for (int i8 = 0; i8 < this.topMessages.size(); i8++) {
+                    if (this.topMessages.get(i8).dialogId == message.dialogId) {
+                        this.topMessages.get(i8).getStars();
+                        groupcalldonor.stars += this.topMessages.get(i8).max_stars;
+                    }
+                }
+                this.topDonors.add(groupcalldonor);
+            }
+            long j4 = groupcalldonor.stars;
+            long j5 = message.stars;
+            long j6 = j4 + j5;
+            groupcalldonor.stars = j6;
+            onStarReaction(message.dialogId, (int) j6, (int) j5);
+        }
+        updateMessagesPlaces();
+        if (z2) {
+            AndroidUtilities.cancelRunOnUIThread(this.updateAdapters);
+            AndroidUtilities.runOnUIThread(this.updateAdapters, 100L);
+        }
+        saveHistory();
+    }
+
+    public /* synthetic */ void lambda$new$17() {
+        this.adapter.update(true);
+        this.topAdapter.update(true);
+    }
+
+    private void updateMessagesPlaces() {
+        int place;
+        int place2;
+        this.topPlaces.clear();
+        ArrayList arrayList = new ArrayList();
+        ArrayList<TL_phone.groupCallDonor> arrayList2 = this.topDonors;
+        if (arrayList2 != null) {
+            arrayList.addAll(arrayList2);
+        }
+        Collections.sort(arrayList, new Comparator() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda11
+            @Override // java.util.Comparator
+            public final int compare(Object obj, Object obj2) {
+                return LiveCommentsView.m20466$r8$lambda$y3Wo3CjgU70cCc3MVU1TZwWVTU((TL_phone.groupCallDonor) obj, (TL_phone.groupCallDonor) obj2);
+            }
+        });
+        int size = arrayList.size();
+        int i = Integer.MIN_VALUE;
+        int i2 = 0;
+        int i3 = 0;
+        while (i3 < size) {
+            Object obj = arrayList.get(i3);
+            i3++;
+            TL_phone.groupCallDonor groupcalldonor = (TL_phone.groupCallDonor) obj;
+            int i4 = (int) groupcalldonor.stars;
+            if (i4 != i) {
+                i2++;
+                i = i4;
+            }
+            if (i2 > 3) {
+                break;
+            } else {
+                this.topPlaces.put(Long.valueOf(DialogObject.getPeerDialogId(groupcalldonor.peer_id)), Integer.valueOf(i2));
+            }
+        }
+        for (int i5 = 0; i5 < this.listView.getChildCount(); i5++) {
+            View childAt = this.listView.getChildAt(i5);
+            if (childAt instanceof LiveCommentView) {
+                LiveCommentView liveCommentView = (LiveCommentView) childAt;
+                if (liveCommentView.message != null && (place2 = getPlace(liveCommentView.message.dialogId)) != liveCommentView.message.place) {
+                    liveCommentView.message.place = place2;
+                    liveCommentView.set(liveCommentView.message);
+                }
+            }
+        }
+        for (int i6 = 0; i6 < this.messages.size(); i6++) {
+            Message message = this.messages.get(i6);
+            int place3 = getPlace(message.dialogId);
+            if (place3 != message.place) {
+                message.place = place3;
+            }
+        }
+        for (int i7 = 0; i7 < this.topListView.getChildCount(); i7++) {
+            View childAt2 = this.topListView.getChildAt(i7);
+            if (childAt2 instanceof LiveTopSenderView) {
+                LiveTopSenderView liveTopSenderView = (LiveTopSenderView) childAt2;
+                if (liveTopSenderView.sender != null && (place = getPlace(liveTopSenderView.sender.dialogId)) != liveTopSenderView.sender.place) {
+                    liveTopSenderView.sender.place = place;
+                    liveTopSenderView.set(liveTopSenderView.sender);
+                }
+            }
+        }
+        for (int i8 = 0; i8 < this.topMessages.size(); i8++) {
+            TopSender topSender = this.topMessages.get(i8);
+            int place4 = getPlace(topSender.dialogId);
+            if (place4 != topSender.place) {
+                topSender.place = place4;
+            }
+        }
+    }
+
+    /* JADX INFO: renamed from: $r8$lambda$y3Wo3-CjgU70cCc3MVU1TZwWVTU */
+    public static /* synthetic */ int m20466$r8$lambda$y3Wo3CjgU70cCc3MVU1TZwWVTU(TL_phone.groupCallDonor groupcalldonor, TL_phone.groupCallDonor groupcalldonor2) {
+        return (int) (groupcalldonor2.stars - groupcalldonor.stars);
+    }
+
+    private int getPlace(long j) {
+        return this.topPlaces.getOrDefault(Long.valueOf(j), 0).intValue();
+    }
+
+    public static class LiveCommentView extends FrameLayout implements ItemOptions.ScrimView {
+        public final LinearLayout adminLayout;
+        public final SpoilersTextView adminNameView;
+        public final SpoilersTextView adminRoleView;
+        public final AvatarDrawable avatarDrawable;
+        public final BackupImageView avatarView;
+        public Drawable background;
+        private final Paint backgroundPaint;
+        public float backgroundViewAlpha;
+        private final int currentAccount;
+        private boolean drawParticles;
+        private boolean drawStar;
+        private final boolean filled;
+        private ValueAnimator highlightAnimator;
+        private int highlightingMessageId;
+        public final LinearLayout layout;
+        private Message message;
+        public final TextView smallStarsView;
+        private final ColoredImageSpan[] smallStarsViewCache;
+        public final TextView starsView;
+        private final ColoredImageSpan[] starsViewCache;
+        public CharSequence text;
+        public final LinearLayout textLayout;
+        public final SpoilersTextView textView;
+
+        public void setDrawStar(boolean z) {
+            this.drawStar = z;
+            ColoredImageSpan coloredImageSpan = this.starsViewCache[0];
+            if (coloredImageSpan == null || coloredImageSpan.draw == z) {
+                return;
+            }
+            coloredImageSpan.draw = z;
+            this.starsView.invalidate();
+        }
+
+        public void getStarLocation(RectF rectF) {
+            if (this.starsViewCache[0] == null || this.starsView.getLayout() == null) {
+                return;
+            }
+            float x = this.starsView.getX() + this.starsView.getPaddingLeft() + this.starsViewCache[0].translateX;
+            float y = this.starsView.getY() + this.starsView.getPaddingTop() + this.starsViewCache[0].translateY;
+            rectF.set(x, y, r3.drawable.getBounds().width() + x, this.starsViewCache[0].drawable.getBounds().height() + y);
+        }
+
+        public LiveCommentView(Context context, int i, boolean z) {
+            super(context);
+            this.drawParticles = false;
+            this.drawStar = true;
+            this.backgroundViewAlpha = 0.5f;
+            this.starsViewCache = new ColoredImageSpan[1];
+            this.smallStarsViewCache = new ColoredImageSpan[1];
+            this.backgroundPaint = new Paint(1);
+            this.currentAccount = i;
+            this.filled = z;
+            C68711 c68711 = new LinearLayout(context) { // from class: org.telegram.ui.Stories.LiveCommentsView.LiveCommentView.1
+                Path clipPath = new Path();
+                StarsReactionsSheet.Particles particles;
+
+                public C68711(Context context2) {
+                    super(context2);
+                    this.clipPath = new Path();
+                }
+
+                @Override // android.view.ViewGroup, android.view.View
+                public void dispatchDraw(Canvas canvas) {
+                    if (LiveCommentView.this.drawParticles) {
+                        this.clipPath.rewind();
+                        RectF rectF = AndroidUtilities.rectTmp;
+                        rectF.set(0.0f, 0.0f, getWidth(), getHeight());
+                        this.clipPath.addRoundRect(rectF, AndroidUtilities.m1036dp(13.0f), AndroidUtilities.m1036dp(13.0f), Path.Direction.CW);
+                        canvas.save();
+                        canvas.clipPath(this.clipPath);
+                        if (this.particles == null) {
+                            this.particles = new StarsReactionsSheet.Particles(1, 250);
+                        }
+                        this.particles.setBounds(0, 0, getWidth(), getHeight());
+                        this.particles.setSpeed(30.0f);
+                        this.particles.process();
+                        this.particles.draw(canvas, -1, 0.85f);
+                        invalidate();
+                        canvas.restore();
+                    }
+                    super.dispatchDraw(canvas);
+                }
+            };
+            this.layout = c68711;
+            c68711.setOrientation(0);
+            addView(c68711, LayoutHelper.createFrame(-2, -2.0f, 51, 0.0f, 0.5f, 0.0f, 0.5f));
+            this.avatarDrawable = new AvatarDrawable();
+            BackupImageView backupImageView = new BackupImageView(context2);
+            this.avatarView = backupImageView;
+            backupImageView.setRoundRadius(AndroidUtilities.m1036dp(11.0f));
+            c68711.addView(backupImageView, LayoutHelper.createLinear(22, 22, 0.0f, 51, 3, 2, 3, 2));
+            LinearLayout linearLayout = new LinearLayout(context2);
+            this.textLayout = linearLayout;
+            linearLayout.setOrientation(1);
+            c68711.addView(linearLayout, LayoutHelper.createLinear(-2, -2, 1.0f, 51, 4, 3, 7, 3));
+            LinearLayout linearLayout2 = new LinearLayout(context2);
+            this.adminLayout = linearLayout2;
+            linearLayout2.setOrientation(0);
+            linearLayout2.setVisibility(8);
+            linearLayout.addView(linearLayout2, LayoutHelper.createLinear(-2, -2));
+            SpoilersTextView spoilersTextView = new SpoilersTextView(context2);
+            this.adminNameView = spoilersTextView;
+            spoilersTextView.setTextColor(-1);
+            spoilersTextView.setTextSize(1, 14.0f);
+            spoilersTextView.setGravity(3);
+            spoilersTextView.setTypeface(AndroidUtilities.bold());
+            linearLayout2.addView(spoilersTextView, LayoutHelper.createLinear(-2, -2, 1.0f, 51, 0, 0, 16, 0));
+            SpoilersTextView spoilersTextView2 = new SpoilersTextView(context2);
+            this.adminRoleView = spoilersTextView2;
+            spoilersTextView2.setTextColor(Theme.multAlpha(-1, 0.55f));
+            spoilersTextView2.setTextSize(1, 12.0f);
+            spoilersTextView2.setGravity(5);
+            linearLayout2.addView(spoilersTextView2, LayoutHelper.createLinear(-2, -2, 0.0f, 53, 0, 0, 0, 0));
+            SpoilersTextView spoilersTextView3 = new SpoilersTextView(context2);
+            this.textView = spoilersTextView3;
+            spoilersTextView3.setTextColor(-1);
+            spoilersTextView3.setTextSize(1, 14.0f);
+            spoilersTextView3.setShadowLayer(AndroidUtilities.m1036dp(2.5f), 0.0f, AndroidUtilities.m1036dp(1.5f), Theme.multAlpha(-16777216, 0.6f));
+            NotificationCenter.listenEmojiLoading(spoilersTextView3);
+            linearLayout.addView(spoilersTextView3, LayoutHelper.createLinear(-2, -2));
+            TextView textView = new TextView(context2);
+            this.starsView = textView;
+            textView.setTextColor(-1);
+            textView.setTextSize(1, 11.0f);
+            textView.setPadding(AndroidUtilities.m1036dp(4.66f), 0, AndroidUtilities.m1036dp(4.66f), 0);
+            textView.setVisibility(8);
+            c68711.addView(textView, LayoutHelper.createLinear(-2, 16, 0.0f, 21, -3, 0, 6, 0));
+            TextView textView2 = new TextView(context2);
+            this.smallStarsView = textView2;
+            textView2.setTextColor(-1);
+            textView2.setAlpha(0.65f);
+            textView2.setTextSize(1, 11.0f);
+            textView2.setVisibility(8);
+            c68711.addView(textView2, LayoutHelper.createLinear(-2, -2, 0.0f, 85, 0, 3, 10, 0));
+        }
+
+        /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$LiveCommentView$1 */
+        public class C68711 extends LinearLayout {
+            Path clipPath = new Path();
+            StarsReactionsSheet.Particles particles;
+
+            public C68711(Context context2) {
+                super(context2);
+                this.clipPath = new Path();
+            }
+
+            @Override // android.view.ViewGroup, android.view.View
+            public void dispatchDraw(Canvas canvas) {
+                if (LiveCommentView.this.drawParticles) {
+                    this.clipPath.rewind();
+                    RectF rectF = AndroidUtilities.rectTmp;
+                    rectF.set(0.0f, 0.0f, getWidth(), getHeight());
+                    this.clipPath.addRoundRect(rectF, AndroidUtilities.m1036dp(13.0f), AndroidUtilities.m1036dp(13.0f), Path.Direction.CW);
+                    canvas.save();
+                    canvas.clipPath(this.clipPath);
+                    if (this.particles == null) {
+                        this.particles = new StarsReactionsSheet.Particles(1, 250);
+                    }
+                    this.particles.setBounds(0, 0, getWidth(), getHeight());
+                    this.particles.setSpeed(30.0f);
+                    this.particles.process();
+                    this.particles.draw(canvas, -1, 0.85f);
+                    invalidate();
+                    canvas.restore();
+                }
+                super.dispatchDraw(canvas);
+            }
+        }
+
+        public void highlight() {
+            ValueAnimator valueAnimator = this.highlightAnimator;
+            if (valueAnimator != null) {
+                valueAnimator.cancel();
+                this.highlightAnimator = null;
+                Drawable drawable = this.background;
+                if (drawable != null) {
+                    drawable.setAlpha((int) (this.backgroundViewAlpha * 255.0f));
+                    this.layout.invalidate();
+                }
+            }
+            Message message = this.message;
+            if (message == null || this.background == null) {
+                return;
+            }
+            this.highlightingMessageId = message.f1789id;
+            ValueAnimator valueAnimatorOfFloat = ValueAnimator.ofFloat(0.0f, 1.0f);
+            this.highlightAnimator = valueAnimatorOfFloat;
+            valueAnimatorOfFloat.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() { // from class: org.telegram.ui.Stories.LiveCommentsView$LiveCommentView$$ExternalSyntheticLambda1
+                @Override // android.animation.ValueAnimator.AnimatorUpdateListener
+                public final void onAnimationUpdate(ValueAnimator valueAnimator2) {
+                    this.f$0.lambda$highlight$0(valueAnimator2);
+                }
+            });
+            this.highlightAnimator.addListener(new C68722());
+            this.highlightAnimator.setDuration(350L);
+            this.highlightAnimator.setInterpolator(CubicBezierInterpolator.EASE_OUT_QUINT);
+            this.highlightAnimator.start();
+        }
+
+        public /* synthetic */ void lambda$highlight$0(ValueAnimator valueAnimator) {
+            float fFloatValue = ((Float) valueAnimator.getAnimatedValue()).floatValue();
+            Drawable drawable = this.background;
+            if (drawable != null) {
+                drawable.setAlpha((int) (AndroidUtilities.lerp(this.backgroundViewAlpha, 1.0f, fFloatValue) * 255.0f));
+                this.layout.invalidate();
+            }
+        }
+
+        /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$LiveCommentView$2 */
+        public class C68722 extends AnimatorListenerAdapter {
+            public C68722() {
+            }
+
+            @Override // android.animation.AnimatorListenerAdapter, android.animation.Animator.AnimatorListener
+            public void onAnimationEnd(Animator animator) {
+                if (LiveCommentView.this.message == null || LiveCommentView.this.highlightingMessageId != LiveCommentView.this.message.f1789id) {
+                    return;
+                }
+                LiveCommentView.this.highlightAnimator = ValueAnimator.ofFloat(0.0f, 1.0f);
+                LiveCommentView.this.highlightAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() { // from class: org.telegram.ui.Stories.LiveCommentsView$LiveCommentView$2$$ExternalSyntheticLambda0
+                    @Override // android.animation.ValueAnimator.AnimatorUpdateListener
+                    public final void onAnimationUpdate(ValueAnimator valueAnimator) {
+                        this.f$0.lambda$onAnimationEnd$0(valueAnimator);
+                    }
+                });
+                LiveCommentView.this.highlightAnimator.setStartDelay(3000L);
+                LiveCommentView.this.highlightAnimator.setDuration(550L);
+                LiveCommentView.this.highlightAnimator.setInterpolator(new LinearInterpolator());
+                LiveCommentView.this.highlightAnimator.start();
+            }
+
+            public /* synthetic */ void lambda$onAnimationEnd$0(ValueAnimator valueAnimator) {
+                float fFloatValue = ((Float) valueAnimator.getAnimatedValue()).floatValue();
+                LiveCommentView liveCommentView = LiveCommentView.this;
+                Drawable drawable = liveCommentView.background;
+                if (drawable != null) {
+                    drawable.setAlpha((int) (AndroidUtilities.lerp(1.0f, liveCommentView.backgroundViewAlpha, fFloatValue) * 255.0f));
+                    LiveCommentView.this.layout.invalidate();
+                }
+            }
+        }
+
+        /* JADX WARN: Removed duplicated region for block: B:155:0x022b  */
+        /*
+            Code decompiled incorrectly, please refer to instructions dump.
+            To view partially-correct code enable 'Show inconsistent code' option in preferences
+        */
+        public void set(org.telegram.ui.Stories.LiveCommentsView.Message r23) {
+            /*
+                Method dump skipped, instruction units count: 1020
+                To view this dump change 'Code comments level' option to 'DEBUG'
+            */
+            throw new UnsupportedOperationException("Method not decompiled: org.telegram.ui.Stories.LiveCommentsView.LiveCommentView.set(org.telegram.ui.Stories.LiveCommentsView$Message):void");
+        }
+
+        /* JADX INFO: renamed from: $r8$lambda$F7X9DwF-aQsZa6QS3jF4kyw0G_o */
+        public static /* synthetic */ int m20472$r8$lambda$F7X9DwFaQsZa6QS3jF4kyw0G_o(Pair pair, Pair pair2) {
+            return ((Integer) pair.first).intValue() - ((Integer) pair2.first).intValue();
+        }
+
+        /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$LiveCommentView$3 */
+        public class C68733 extends ReplacementSpan {
+            private final RectF rect = new RectF();
+
+            /* JADX INFO: renamed from: bg */
+            private final Paint f1788bg = new Paint(1);
+            private final Text text = new Text(LocaleController.getString(C2797R.string.LiveStoryBadge), 8.0f, AndroidUtilities.bold());
+
+            public C68733() {
+            }
+
+            @Override // android.text.style.ReplacementSpan
+            public int getSize(Paint paint, CharSequence charSequence, int i, int i2, Paint.FontMetricsInt fontMetricsInt) {
+                return (int) (this.text.getWidth() + AndroidUtilities.m1036dp(8.0f));
+            }
+
+            @Override // android.text.style.ReplacementSpan
+            public void draw(Canvas canvas, CharSequence charSequence, int i, int i2, float f, int i3, int i4, int i5, Paint paint) {
+                float fM1036dp = ((i3 + i5) / 2.0f) + AndroidUtilities.m1036dp(0.0f);
+                this.rect.set(f, fM1036dp - AndroidUtilities.m1036dp(6.0f), this.text.getWidth() + f + AndroidUtilities.m1036dp(8.0f), AndroidUtilities.m1036dp(6.0f) + fM1036dp);
+                this.f1788bg.setColor(-572850);
+                RectF rectF = this.rect;
+                canvas.drawRoundRect(rectF, rectF.height() / 2.0f, this.rect.height() / 2.0f, this.f1788bg);
+                this.text.draw(canvas, AndroidUtilities.m1036dp(4.0f) + f, fM1036dp, -1, 1.0f);
+            }
+        }
+
+        public static final class AlphaSpan extends CharacterStyle {
+            private final float alpha;
+
+            public AlphaSpan(float f) {
+                this.alpha = f;
+            }
+
+            @Override // android.text.style.CharacterStyle
+            public void updateDrawState(TextPaint textPaint) {
+                textPaint.setAlpha((int) (this.alpha * textPaint.getAlpha()));
+            }
+        }
+
+        @Override // org.telegram.ui.Components.ItemOptions.ScrimView
+        public void drawScrim(Canvas canvas, float f) {
+            if (this.layout.getBackground() == null) {
+                this.backgroundPaint.setColor(Theme.multAlpha(-16777216, f * 0.5f));
+                RectF rectF = AndroidUtilities.rectTmp;
+                rectF.set(this.layout.getX(), this.layout.getY(), this.layout.getX() + this.layout.getWidth(), this.layout.getY() + this.layout.getHeight());
+                canvas.drawRoundRect(rectF, AndroidUtilities.m1036dp(13.0f), AndroidUtilities.m1036dp(13.0f), this.backgroundPaint);
+            }
+            draw(canvas);
+        }
+
+        @Override // android.widget.FrameLayout, android.view.View
+        public void onMeasure(int i, int i2) {
+            super.onMeasure(i, i2);
+            setPivotX(0.0f);
+            setPivotY(getMeasuredHeight());
+        }
+
+        public static class Factory extends UItem.UItemFactory<LiveCommentView> {
+            static {
+                UItem.UItemFactory.setup(new Factory());
+            }
+
+            @Override // org.telegram.ui.Components.UItem.UItemFactory
+            public LiveCommentView createView(Context context, RecyclerListView recyclerListView, int i, int i2, Theme.ResourcesProvider resourcesProvider) {
+                LiveCommentView liveCommentView = new LiveCommentView(context, i, false);
+                liveCommentView.setLayoutParams(new RecyclerView.LayoutParams(-2, -2));
+                return liveCommentView;
+            }
+
+            @Override // org.telegram.ui.Components.UItem.UItemFactory
+            public void bindView(View view, UItem uItem, boolean z, UniversalAdapter universalAdapter, UniversalRecyclerView universalRecyclerView) {
+                ((LiveCommentView) view).set((Message) uItem.object);
+            }
+
+            /* JADX INFO: renamed from: of */
+            public static UItem m1207of(Message message) {
+                UItem uItemOfFactory = UItem.ofFactory(Factory.class);
+                uItemOfFactory.object = message;
+                return uItemOfFactory;
+            }
+
+            @Override // org.telegram.ui.Components.UItem.UItemFactory
+            public boolean equals(UItem uItem, UItem uItem2) {
+                return uItem.object == uItem2.object;
+            }
+        }
+    }
+
+    public static class LiveTopSenderView extends FrameLayout {
+        public final AvatarDrawable avatarDrawable;
+        public final BackupImageView avatarView;
+        public final ImageView crownView;
+        public final LinearLayout layout;
+        private TopSender sender;
+        public final TextView textView;
+
+        public LiveTopSenderView(Context context) {
+            super(context);
+            ScaleStateListAnimator.apply(this);
+            C68741 c68741 = new LinearLayout(context) { // from class: org.telegram.ui.Stories.LiveCommentsView.LiveTopSenderView.1
+                StarsReactionsSheet.Particles particles;
+                final Path clipPath = new Path();
+                final Paint fillPaint = new Paint(1);
+                long lastDialogId = 0;
+                final AnimatedFloat animatedProgress = new AnimatedFloat(this, 0, 1000, new LinearInterpolator());
+
+                public C68741(Context context2) {
+                    super(context2);
+                    this.clipPath = new Path();
+                    this.fillPaint = new Paint(1);
+                    this.lastDialogId = 0L;
+                    this.animatedProgress = new AnimatedFloat(this, 0L, 1000L, new LinearInterpolator());
+                }
+
+                @Override // android.view.ViewGroup, android.view.View
+                public void dispatchDraw(Canvas canvas) {
+                    Canvas canvas2;
+                    this.clipPath.rewind();
+                    RectF rectF = AndroidUtilities.rectTmp;
+                    rectF.set(0.0f, 0.0f, getWidth(), getHeight());
+                    this.clipPath.addRoundRect(rectF, AndroidUtilities.m1036dp(13.0f), AndroidUtilities.m1036dp(13.0f), Path.Direction.CW);
+                    canvas.save();
+                    canvas.clipPath(this.clipPath);
+                    if (LiveTopSenderView.this.sender != null) {
+                        int tierOption = HighlightMessageSheet.getTierOption(LiveTopSenderView.this.sender.currentAccount, LiveTopSenderView.this.sender.getStars(), HighlightMessageSheet.TIER_COLOR1);
+                        int tierOption2 = HighlightMessageSheet.getTierOption(LiveTopSenderView.this.sender.currentAccount, LiveTopSenderView.this.sender.getStars(), HighlightMessageSheet.TIER_COLOR_BACKGROUND);
+                        canvas.drawColor(tierOption);
+                        if (this.lastDialogId != LiveTopSenderView.this.sender.dialogId) {
+                            this.animatedProgress.force(LiveTopSenderView.this.sender.getProgress());
+                        }
+                        float f = this.animatedProgress.set(LiveTopSenderView.this.sender.getProgress());
+                        this.lastDialogId = LiveTopSenderView.this.sender.dialogId;
+                        this.fillPaint.setColor(tierOption2);
+                        this.fillPaint.setAlpha(127);
+                        canvas2 = canvas;
+                        canvas2.drawRect(getWidth() * f, 0.0f, getWidth(), getHeight(), this.fillPaint);
+                    } else {
+                        canvas2 = canvas;
+                    }
+                    if (this.particles == null) {
+                        this.particles = new StarsReactionsSheet.Particles(1, 250);
+                    }
+                    this.particles.setBounds(0, 0, getWidth(), getHeight());
+                    this.particles.setSpeed(30.0f);
+                    this.particles.process();
+                    this.particles.draw(canvas2, -1, 0.85f);
+                    invalidate();
+                    canvas2.restore();
+                    super.dispatchDraw(canvas2);
+                }
+            };
+            this.layout = c68741;
+            c68741.setOrientation(0);
+            addView(c68741, LayoutHelper.createFrame(-2, -2.0f, 119, 0.0f, 0.0f, 6.0f, 0.0f));
+            this.avatarDrawable = new AvatarDrawable();
+            BackupImageView backupImageView = new BackupImageView(context2);
+            this.avatarView = backupImageView;
+            backupImageView.setRoundRadius(AndroidUtilities.m1036dp(11.0f));
+            c68741.addView(backupImageView, LayoutHelper.createLinear(22, 22, 0.0f, 51, 3, 2, 7, 2));
+            ImageView imageView = new ImageView(context2);
+            this.crownView = imageView;
+            imageView.setVisibility(8);
+            c68741.addView(imageView, LayoutHelper.createLinear(18, 18, 19, 0, 0, 3, 0));
+            C68752 c68752 = new TextView(context2) { // from class: org.telegram.ui.Stories.LiveCommentsView.LiveTopSenderView.2
+                private int width = -1;
+                private final GradientClip clip = new GradientClip();
+
+                public C68752(Context context2) {
+                    super(context2);
+                    this.width = -1;
+                    this.clip = new GradientClip();
+                }
+
+                @Override // android.widget.TextView, android.view.View
+                public void onMeasure(int i, int i2) {
+                    super.onMeasure(View.MeasureSpec.makeMeasureSpec(AndroidUtilities.m1036dp(100.0f), Integer.MIN_VALUE), i2);
+                }
+
+                @Override // android.widget.TextView
+                public void setText(CharSequence charSequence, TextView.BufferType bufferType) {
+                    super.setText(charSequence, bufferType);
+                    this.width = -1;
+                }
+
+                @Override // android.widget.TextView, android.view.View
+                public void onDraw(Canvas canvas) {
+                    if (this.width < 0) {
+                        this.width = getLayout() != null ? (int) getLayout().getLineWidth(0) : 0;
+                    }
+                    if (this.width > AndroidUtilities.m1036dp(100.0f)) {
+                        canvas.saveLayerAlpha(0.0f, 0.0f, getWidth(), getHeight(), 255, 31);
+                        super.onDraw(canvas);
+                        canvas.save();
+                        RectF rectF = AndroidUtilities.rectTmp;
+                        rectF.set(getWidth() - AndroidUtilities.m1036dp(15.0f), 0.0f, getWidth(), getHeight());
+                        this.clip.draw(canvas, rectF, 2, 1.0f);
+                        canvas.restore();
+                        canvas.restore();
+                        return;
+                    }
+                    super.onDraw(canvas);
+                }
+            };
+            this.textView = c68752;
+            c68752.setLines(1);
+            c68752.setSingleLine();
+            c68752.setTextColor(-1);
+            c68752.setTextSize(1, 14.0f);
+            c68752.setTypeface(AndroidUtilities.bold());
+            c68741.addView(c68752, LayoutHelper.createLinear(-2, -2, 16, 0, 0, 7, 0));
+        }
+
+        /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$LiveTopSenderView$1 */
+        public class C68741 extends LinearLayout {
+            StarsReactionsSheet.Particles particles;
+            final Path clipPath = new Path();
+            final Paint fillPaint = new Paint(1);
+            long lastDialogId = 0;
+            final AnimatedFloat animatedProgress = new AnimatedFloat(this, 0, 1000, new LinearInterpolator());
+
+            public C68741(Context context2) {
+                super(context2);
+                this.clipPath = new Path();
+                this.fillPaint = new Paint(1);
+                this.lastDialogId = 0L;
+                this.animatedProgress = new AnimatedFloat(this, 0L, 1000L, new LinearInterpolator());
+            }
+
+            @Override // android.view.ViewGroup, android.view.View
+            public void dispatchDraw(Canvas canvas) {
+                Canvas canvas2;
+                this.clipPath.rewind();
+                RectF rectF = AndroidUtilities.rectTmp;
+                rectF.set(0.0f, 0.0f, getWidth(), getHeight());
+                this.clipPath.addRoundRect(rectF, AndroidUtilities.m1036dp(13.0f), AndroidUtilities.m1036dp(13.0f), Path.Direction.CW);
+                canvas.save();
+                canvas.clipPath(this.clipPath);
+                if (LiveTopSenderView.this.sender != null) {
+                    int tierOption = HighlightMessageSheet.getTierOption(LiveTopSenderView.this.sender.currentAccount, LiveTopSenderView.this.sender.getStars(), HighlightMessageSheet.TIER_COLOR1);
+                    int tierOption2 = HighlightMessageSheet.getTierOption(LiveTopSenderView.this.sender.currentAccount, LiveTopSenderView.this.sender.getStars(), HighlightMessageSheet.TIER_COLOR_BACKGROUND);
+                    canvas.drawColor(tierOption);
+                    if (this.lastDialogId != LiveTopSenderView.this.sender.dialogId) {
+                        this.animatedProgress.force(LiveTopSenderView.this.sender.getProgress());
+                    }
+                    float f = this.animatedProgress.set(LiveTopSenderView.this.sender.getProgress());
+                    this.lastDialogId = LiveTopSenderView.this.sender.dialogId;
+                    this.fillPaint.setColor(tierOption2);
+                    this.fillPaint.setAlpha(127);
+                    canvas2 = canvas;
+                    canvas2.drawRect(getWidth() * f, 0.0f, getWidth(), getHeight(), this.fillPaint);
+                } else {
+                    canvas2 = canvas;
+                }
+                if (this.particles == null) {
+                    this.particles = new StarsReactionsSheet.Particles(1, 250);
+                }
+                this.particles.setBounds(0, 0, getWidth(), getHeight());
+                this.particles.setSpeed(30.0f);
+                this.particles.process();
+                this.particles.draw(canvas2, -1, 0.85f);
+                invalidate();
+                canvas2.restore();
+                super.dispatchDraw(canvas2);
+            }
+        }
+
+        /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$LiveTopSenderView$2 */
+        public class C68752 extends TextView {
+            private int width = -1;
+            private final GradientClip clip = new GradientClip();
+
+            public C68752(Context context2) {
+                super(context2);
+                this.width = -1;
+                this.clip = new GradientClip();
+            }
+
+            @Override // android.widget.TextView, android.view.View
+            public void onMeasure(int i, int i2) {
+                super.onMeasure(View.MeasureSpec.makeMeasureSpec(AndroidUtilities.m1036dp(100.0f), Integer.MIN_VALUE), i2);
+            }
+
+            @Override // android.widget.TextView
+            public void setText(CharSequence charSequence, TextView.BufferType bufferType) {
+                super.setText(charSequence, bufferType);
+                this.width = -1;
+            }
+
+            @Override // android.widget.TextView, android.view.View
+            public void onDraw(Canvas canvas) {
+                if (this.width < 0) {
+                    this.width = getLayout() != null ? (int) getLayout().getLineWidth(0) : 0;
+                }
+                if (this.width > AndroidUtilities.m1036dp(100.0f)) {
+                    canvas.saveLayerAlpha(0.0f, 0.0f, getWidth(), getHeight(), 255, 31);
+                    super.onDraw(canvas);
+                    canvas.save();
+                    RectF rectF = AndroidUtilities.rectTmp;
+                    rectF.set(getWidth() - AndroidUtilities.m1036dp(15.0f), 0.0f, getWidth(), getHeight());
+                    this.clip.draw(canvas, rectF, 2, 1.0f);
+                    canvas.restore();
+                    canvas.restore();
+                    return;
+                }
+                super.onDraw(canvas);
+            }
+        }
+
+        public void set(TopSender topSender) {
+            this.sender = topSender;
+            if (topSender.dialogId >= 0) {
+                TLRPC.User user = MessagesController.getInstance(UserConfig.selectedAccount).getUser(Long.valueOf(topSender.dialogId));
+                this.avatarDrawable.setInfo(user);
+                this.avatarView.setForUserOrChat(user, this.avatarDrawable);
+            } else {
+                TLRPC.Chat chat = MessagesController.getInstance(UserConfig.selectedAccount).getChat(Long.valueOf(-topSender.dialogId));
+                this.avatarDrawable.setInfo(chat);
+                this.avatarView.setForUserOrChat(chat, this.avatarDrawable);
+            }
+            int i = topSender.place;
+            ImageView imageView = this.crownView;
+            if (i > 0) {
+                imageView.setImageDrawable(new CrownDrawable(getContext(), topSender.place));
+                this.crownView.setVisibility(0);
+            } else {
+                imageView.setVisibility(8);
+            }
+            this.textView.setText(DialogObject.getName(topSender.dialogId));
+            this.layout.invalidate();
+        }
+
+        public static class Factory extends UItem.UItemFactory<LiveTopSenderView> {
+            static {
+                UItem.UItemFactory.setup(new Factory());
+            }
+
+            @Override // org.telegram.ui.Components.UItem.UItemFactory
+            public LiveTopSenderView createView(Context context, RecyclerListView recyclerListView, int i, int i2, Theme.ResourcesProvider resourcesProvider) {
+                return new LiveTopSenderView(context);
+            }
+
+            @Override // org.telegram.ui.Components.UItem.UItemFactory
+            public void bindView(View view, UItem uItem, boolean z, UniversalAdapter universalAdapter, UniversalRecyclerView universalRecyclerView) {
+                ((LiveTopSenderView) view).set((TopSender) uItem.object);
+            }
+
+            /* JADX INFO: renamed from: of */
+            public static UItem m1208of(TopSender topSender) {
+                UItem uItemOfFactory = UItem.ofFactory(Factory.class);
+                uItemOfFactory.object = topSender;
+                return uItemOfFactory;
+            }
+
+            @Override // org.telegram.ui.Components.UItem.UItemFactory
+            public boolean equals(UItem uItem, UItem uItem2) {
+                return uItem.object == uItem2.object;
+            }
+        }
+    }
+
+    public static class CrownDrawable extends Drawable {
+        private final Drawable crown;
+        private final float scale = 0.75f;
+        private final Text text;
+
+        @Override // android.graphics.drawable.Drawable
+        public int getOpacity() {
+            return -2;
+        }
+
+        public CrownDrawable(Context context, int i) {
+            this.crown = context.getResources().getDrawable(C2797R.drawable.filled_stream_crown).mutate();
+            Text text = new Text(_UrlKt.FRAGMENT_ENCODE_SET + i, 8.0f, AndroidUtilities.getTypeface("fonts/num.otf"));
+            this.text = text;
+            text.paint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
+        }
+
+        @Override // android.graphics.drawable.Drawable
+        public void draw(Canvas canvas) {
+            Rect bounds = getBounds();
+            canvas.saveLayerAlpha(bounds.left, bounds.top, bounds.right, bounds.bottom, 255, 31);
+            this.crown.setBounds(bounds);
+            this.crown.draw(canvas);
+            this.text.draw(canvas, bounds.centerX() - (this.text.getCurrentWidth() / 2.0f), bounds.centerY() + AndroidUtilities.m1036dp(0.15f), -1, this.crown.getAlpha() / 255.0f);
+            canvas.restore();
+        }
+
+        @Override // android.graphics.drawable.Drawable
+        public int getIntrinsicWidth() {
+            return (int) (this.crown.getIntrinsicWidth() * this.scale);
+        }
+
+        @Override // android.graphics.drawable.Drawable
+        public int getIntrinsicHeight() {
+            return (int) (this.crown.getIntrinsicHeight() * this.scale);
+        }
+
+        @Override // android.graphics.drawable.Drawable
+        public int getAlpha() {
+            return this.crown.getAlpha();
+        }
+
+        @Override // android.graphics.drawable.Drawable
+        public void setAlpha(int i) {
+            this.crown.setAlpha(i);
+        }
+
+        @Override // android.graphics.drawable.Drawable
+        public void setColorFilter(ColorFilter colorFilter) {
+            this.crown.setColorFilter(colorFilter);
+        }
+    }
+
+    public static void openDeleteMessage(Context context, long j, final Utilities.Callback3<Boolean, Boolean, Boolean> callback3) {
+        C68708 c68708 = new DarkThemeResourceProvider() { // from class: org.telegram.ui.Stories.LiveCommentsView.8
+            @Override // org.telegram.p035ui.Stories.DarkThemeResourceProvider
+            public void appendColors() {
+                this.sparseIntArray.append(Theme.key_dialogBackground, -14671840);
+            }
+        };
+        final BottomSheet bottomSheet = new BottomSheet(context, false, c68708);
+        bottomSheet.fixNavigationBar();
+        LinearLayout linearLayout = new LinearLayout(context);
+        linearLayout.setOrientation(1);
+        TextView textView = new TextView(context);
+        textView.setTextSize(1, 20.0f);
+        textView.setTextColor(Theme.getColor(Theme.key_dialogTextBlack, c68708));
+        textView.setTypeface(AndroidUtilities.bold());
+        textView.setText(LocaleController.getString(C2797R.string.DeleteSingleMessagesTitle));
+        linearLayout.addView(textView, LayoutHelper.createLinear(-1, -2, 22.0f, 12.0f, 22.0f, 0.0f));
+        HeaderCell headerCell = new HeaderCell(context, c68708);
+        headerCell.setText(LocaleController.getString(C2797R.string.DeleteAdditionalActions));
+        linearLayout.addView(headerCell, LayoutHelper.createLinear(-1, -2, 0.0f, 0.0f, 0.0f, 4.0f));
+        final CheckBoxCell checkBoxCell = new CheckBoxCell(context, 4, 21, true, c68708);
+        CheckBox2 checkBoxRound = checkBoxCell.getCheckBoxRound();
+        int i = Theme.key_switch2TrackChecked;
+        int i2 = Theme.key_radioBackground;
+        int i3 = Theme.key_checkboxCheck;
+        checkBoxRound.setColor(i, i2, i3);
+        checkBoxCell.setText(LocaleController.getString(C2797R.string.DeleteReportSpam), null, false, true);
+        checkBoxCell.setOnClickListener(new View.OnClickListener() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda23
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view) {
+                checkBoxCell.setChecked(!r0.isChecked(), true);
+            }
+        });
+        int i4 = Theme.key_listSelector;
+        checkBoxCell.setBackground(Theme.createSelectorDrawable(Theme.getColor(i4, c68708), 2));
+        linearLayout.addView(checkBoxCell, LayoutHelper.createLinear(-1, -2));
+        final CheckBoxCell checkBoxCell2 = new CheckBoxCell(context, 4, 21, true, c68708);
+        checkBoxCell2.getCheckBoxRound().setColor(i, i2, i3);
+        checkBoxCell2.setText(LocaleController.formatString(C2797R.string.DeleteAllFrom, DialogObject.getName(j)), null, false, true);
+        checkBoxCell2.setOnClickListener(new View.OnClickListener() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda24
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view) {
+                checkBoxCell2.setChecked(!r0.isChecked(), true);
+            }
+        });
+        checkBoxCell2.setBackground(Theme.createSelectorDrawable(Theme.getColor(i4, c68708), 2));
+        linearLayout.addView(checkBoxCell2, LayoutHelper.createLinear(-1, -2));
+        final CheckBoxCell checkBoxCell3 = new CheckBoxCell(context, 4, 21, true, c68708);
+        checkBoxCell3.getCheckBoxRound().setColor(i, i2, i3);
+        checkBoxCell3.setText(LocaleController.formatString(C2797R.string.DeleteBan, DialogObject.getName(j)), null, false, false);
+        checkBoxCell3.setOnClickListener(new View.OnClickListener() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda25
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view) {
+                checkBoxCell3.setChecked(!r0.isChecked(), true);
+            }
+        });
+        checkBoxCell3.setBackground(Theme.createSelectorDrawable(Theme.getColor(i4, c68708), 2));
+        linearLayout.addView(checkBoxCell3, LayoutHelper.createLinear(-1, -2));
+        TextInfoPrivacyCell textInfoPrivacyCell = new TextInfoPrivacyCell(context, c68708);
+        textInfoPrivacyCell.setBackgroundColor(-16777216);
+        textInfoPrivacyCell.setFixedSize(12);
+        linearLayout.addView(textInfoPrivacyCell, LayoutHelper.createLinear(-1, -2));
+        FrameLayout frameLayout = new FrameLayout(context);
+        ButtonWithCounterView buttonWithCounterView = new ButtonWithCounterView(context, c68708);
+        buttonWithCounterView.setText(LocaleController.getString(C2797R.string.DeleteProceedBtn), false);
+        buttonWithCounterView.setOnClickListener(new View.OnClickListener() { // from class: org.telegram.ui.Stories.LiveCommentsView$$ExternalSyntheticLambda26
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view) {
+                LiveCommentsView.$r8$lambda$jmfyXPO07HtNBDdnhW47zhF5dzI(checkBoxCell, checkBoxCell2, checkBoxCell3, callback3, bottomSheet, view);
+            }
+        });
+        frameLayout.addView(buttonWithCounterView, LayoutHelper.createFrame(-1, 48.0f, 119, 16.0f, 16.0f, 16.0f, 16.0f));
+        linearLayout.addView(frameLayout, LayoutHelper.createLinear(-1, -2));
+        bottomSheet.setCustomView(linearLayout);
+        bottomSheet.show();
+    }
+
+    /* JADX INFO: renamed from: org.telegram.ui.Stories.LiveCommentsView$8 */
+    public class C68708 extends DarkThemeResourceProvider {
+        @Override // org.telegram.p035ui.Stories.DarkThemeResourceProvider
+        public void appendColors() {
+            this.sparseIntArray.append(Theme.key_dialogBackground, -14671840);
+        }
+    }
+
+    public static /* synthetic */ void $r8$lambda$jmfyXPO07HtNBDdnhW47zhF5dzI(CheckBoxCell checkBoxCell, CheckBoxCell checkBoxCell2, CheckBoxCell checkBoxCell3, Utilities.Callback3 callback3, BottomSheet bottomSheet, View view) {
+        callback3.run(Boolean.valueOf(checkBoxCell.isChecked()), Boolean.valueOf(checkBoxCell2.isChecked()), Boolean.valueOf(checkBoxCell3.isChecked()));
+        bottomSheet.lambda$new$0();
+    }
+}

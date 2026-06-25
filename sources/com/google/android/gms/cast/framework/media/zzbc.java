@@ -1,0 +1,60 @@
+package com.google.android.gms.cast.framework.media;
+
+import android.support.v4.media.session.MediaSessionCompat$$ExternalSyntheticThrowCCEIfNotNull0;
+import com.google.android.gms.cast.framework.media.RemoteMediaClient;
+import com.google.android.gms.common.api.Result;
+import com.google.android.gms.common.api.Status;
+import com.google.android.gms.common.api.internal.BasePendingResult;
+import java.util.Iterator;
+import java.util.Objects;
+
+/* JADX INFO: loaded from: classes4.dex */
+abstract class zzbc extends BasePendingResult {
+    private com.google.android.gms.cast.internal.zzat zza;
+    private final boolean zzb;
+    final /* synthetic */ RemoteMediaClient zzg;
+
+    /* JADX WARN: 'super' call moved to the top of the method (can break code semantics) */
+    public zzbc(RemoteMediaClient remoteMediaClient, boolean z) {
+        super(null);
+        Objects.requireNonNull(remoteMediaClient);
+        this.zzg = remoteMediaClient;
+        this.zzb = z;
+    }
+
+    @Override // com.google.android.gms.common.api.internal.BasePendingResult
+    public final /* synthetic */ Result createFailedResult(Status status) {
+        return new zzbb(this, status);
+    }
+
+    public abstract void zza();
+
+    public final com.google.android.gms.cast.internal.zzat zzb() {
+        if (this.zza == null) {
+            this.zza = new zzba(this);
+        }
+        return this.zza;
+    }
+
+    public final void zzc() {
+        if (!this.zzb) {
+            RemoteMediaClient remoteMediaClient = this.zzg;
+            Iterator it = remoteMediaClient.zzu().iterator();
+            if (it.hasNext()) {
+                MediaSessionCompat$$ExternalSyntheticThrowCCEIfNotNull0.m2m(it.next());
+                throw null;
+            }
+            Iterator it2 = remoteMediaClient.zzv().iterator();
+            while (it2.hasNext()) {
+                ((RemoteMediaClient.Callback) it2.next()).onSendingRemoteMediaRequest();
+            }
+        }
+        try {
+            synchronized (this.zzg.zzr()) {
+                zza();
+            }
+        } catch (com.google.android.gms.cast.internal.zzap unused) {
+            setResult(new zzbb(this, new Status(2100)));
+        }
+    }
+}

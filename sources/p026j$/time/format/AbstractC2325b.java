@@ -1,0 +1,31 @@
+package p026j$.time.format;
+
+/* JADX INFO: renamed from: j$.time.format.b */
+/* JADX INFO: compiled from: r8-map-id-bb8912b0da79b368bf495f96f4c609789c2f8ac0d4329ff658606d7ee861475b */
+/* JADX INFO: loaded from: classes2.dex */
+public abstract /* synthetic */ class AbstractC2325b {
+
+    /* JADX INFO: renamed from: a */
+    public static final /* synthetic */ int[] f834a;
+
+    static {
+        int[] iArr = new int[EnumC2324a0.values().length];
+        f834a = iArr;
+        try {
+            iArr[EnumC2324a0.EXCEEDS_PAD.ordinal()] = 1;
+        } catch (NoSuchFieldError unused) {
+        }
+        try {
+            f834a[EnumC2324a0.ALWAYS.ordinal()] = 2;
+        } catch (NoSuchFieldError unused2) {
+        }
+        try {
+            f834a[EnumC2324a0.NORMAL.ordinal()] = 3;
+        } catch (NoSuchFieldError unused3) {
+        }
+        try {
+            f834a[EnumC2324a0.NOT_NEGATIVE.ordinal()] = 4;
+        } catch (NoSuchFieldError unused4) {
+        }
+    }
+}
